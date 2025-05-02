@@ -3,78 +3,111 @@
 @tailwind utilities;
 
 body {
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Geist', sans-serif; /* Use Geist font specified in layout */
 }
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    /* Base colors - Soft pastel feel */
+    --background: 0 0% 98%; /* Very light gray */
+    --foreground: 210 10% 23%; /* Dark grayish blue */
+
+    /* Card and Popover - Slightly off-white */
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
+    --card-foreground: 210 10% 23%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
+    --popover-foreground: 210 10% 23%;
+
+    /* Primary - User specified Dark Teal */
+    --primary: 180 100% 25%; /* #008080 */
+    --primary-foreground: 0 0% 98%; /* White */
+
+    /* Secondary - User specified Light Gray */
+    --secondary: 0 0% 94%; /* #F0F0F0 */
+    --secondary-foreground: 180 100% 15%; /* Darker teal for contrast on light gray */
+
+    /* Muted - Slightly darker pastel gray */
+    --muted: 210 10% 90%;
+    --muted-foreground: 210 10% 45%;
+
+    /* Accent - Pastel accent (complementary to teal) */
+    --accent: 30 80% 95%; /* Soft peach */
+    --accent-foreground: 30 80% 30%; /* Darker peach */
+
+    /* Destructive - User specified Bright Red */
+    --destructive: 3 100% 62%; /* #FF4136 */
+    --destructive-foreground: 0 0% 98%; /* White */
+
+    /* Border and Input - Subtle pastel gray */
+    --border: 210 10% 88%;
+    --input: 210 10% 92%;
+    --ring: 180 100% 35%; /* Slightly lighter teal for focus rings */
+
+    /* Chart colors - Pastel palette */
+    --chart-1: 180 60% 70%; /* Lighter Teal */
+    --chart-2: 30 70% 75%;  /* Lighter Peach */
+    --chart-3: 210 50% 70%; /* Lighter Blue-Gray */
+    --chart-4: 120 40% 75%; /* Soft Green */
+    --chart-5: 270 50% 80%; /* Soft Lavender */
+
     --radius: 0.5rem;
-    --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 240 5.9% 10%;
+
+    /* Sidebar - Adjusted for pastel theme consistency */
+    --sidebar-background: 0 0% 96%; /* Slightly darker than main background */
+    --sidebar-foreground: 210 10% 23%;
+    --sidebar-primary: 180 100% 25%; /* Teal */
     --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 4.8% 95.9%;
-    --sidebar-accent-foreground: 240 5.9% 10%;
-    --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 30 80% 95%; /* Soft Peach */
+    --sidebar-accent-foreground: 30 80% 30%;
+    --sidebar-border: 210 10% 85%;
+    --sidebar-ring: 180 100% 35%;
   }
+
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
+    /* Dark theme - Keeping primary/destructive, inverting others */
+    --background: 210 10% 10%; /* Very dark blue-gray */
+    --foreground: 0 0% 98%; /* White */
+
+    --card: 210 10% 12%;
     --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
+    --popover: 210 10% 10%;
     --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
+
+    --primary: 180 100% 35%; /* Lighter teal for dark mode */
+    --primary-foreground: 0 0% 98%;
+
+    --secondary: 210 10% 20%; /* Dark gray */
     --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+
+    --muted: 210 10% 25%;
+    --muted-foreground: 210 10% 65%;
+
+    --accent: 30 70% 25%; /* Darker peach */
+    --accent-foreground: 30 70% 85%; /* Lighter peach */
+
+    --destructive: 3 100% 70%; /* Slightly lighter red for dark mode */
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+
+    --border: 210 10% 28%;
+    --input: 210 10% 23%;
+    --ring: 180 100% 45%;
+
+    /* Chart colors - Dark mode pastel equivalents */
+    --chart-1: 180 60% 50%;
+    --chart-2: 30 70% 55%;
+    --chart-3: 210 50% 50%;
+    --chart-4: 120 40% 55%;
+    --chart-5: 270 50% 60%;
+
+    /* Sidebar Dark */
+    --sidebar-background: 210 10% 15%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 180 100% 35%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 30 70% 25%;
+    --sidebar-accent-foreground: 30 70% 85%;
+    --sidebar-border: 210 10% 28%;
+    --sidebar-ring: 180 100% 45%;
   }
 }
 
