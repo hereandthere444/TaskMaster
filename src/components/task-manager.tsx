@@ -44,6 +44,7 @@ import {
 
 interface PrioritizedTask extends Task {
   id: string;
+  name: string; // Added name field
   priority?: number;
   reason?: string;
   category: 'goal' | 'chore';
@@ -51,6 +52,7 @@ interface PrioritizedTask extends Task {
 }
 
 const taskFormSchema = z.object({
+  name: z.string().min(1, { message: 'Task name cannot be empty.' }), // Added name field
   description: z.string().min(1, { message: 'Description cannot be empty.' }),
   dueDate: z.date({ required_error: "A due date is required." }),
   category: z.enum(['goal', 'chore']),
@@ -88,6 +90,7 @@ export function TaskManager() {
   const form = useForm<TaskFormData>({
     resolver: zodResolver(taskFormSchema),
     defaultValues: {
+      name: '', // Default value for name
       description: '',
       dueDate: undefined,
       category: 'goal',
@@ -101,6 +104,7 @@ export function TaskManager() {
       if (savedTasks) {
           const parsedTasks: PrioritizedTask[] = JSON.parse(savedTasks).map((task: any) => ({
               ...task,
+              name: task.name || task.description, // Add name, fallback to description for old tasks
               // Ensure dueDate is a Date object
               dueDate: task.dueDate ? new Date(task.dueDate) : new Date(),
           }));
@@ -146,7 +150,7 @@ export function TaskManager() {
           const messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
           const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
           const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-          const notificationMessage = `Reminder: "${randomTask.description}" is due ${format(randomTask.dueDate, 'PPP')}. ${randomMessage}`;
+          const notificationMessage = `Reminder: "${randomTask.name}" is due ${format(randomTask.dueDate, 'PPP')}. ${randomMessage}`; // Use task name
 
           // Send persistent notification (console log for now)
           sendPersistentNotification(notificationMessage);
@@ -190,6 +194,7 @@ export function TaskManager() {
   async function onSubmit(data: TaskFormData) {
     const newTask: PrioritizedTask = {
       id: crypto.randomUUID(),
+      name: data.name, // Add name
       description: data.description,
       dueDate: data.dueDate, // Keep as Date object
       category: data.category,
@@ -199,7 +204,7 @@ export function TaskManager() {
     form.reset();
     toast({
       title: "Task Added",
-      description: `"${data.description}" added to your list.`,
+      description: `"${data.name}" added to your list.`, // Use name in toast
     });
   }
 
@@ -214,15 +219,16 @@ export function TaskManager() {
     }
     setIsLoadingAI(true);
     try {
+        // Note: AI flow currently uses description, not name.
+        // If name should affect prioritization, update the AI flow.
       const tasksToPrioritize = tasks.map(task => ({
-        description: task.description,
-        // Convert Date to ISO string for AI
+        description: task.description, // AI uses description
         dueDate: task.dueDate.toISOString(),
       }));
 
       const prioritizedResult = await prioritizeTasks(tasksToPrioritize);
 
-      // Create a map for easy lookup
+      // Create a map for easy lookup based on description + dueDate as the AI doesn't know the ID or name
       const priorityMap = new Map(prioritizedResult.map(p => [p.description + p.dueDate, p]));
 
       const updatedTasks = tasks.map(task => {
@@ -256,21 +262,24 @@ export function TaskManager() {
     setTasks(tasks.filter((task) => task.id !== id));
     toast({
       title: 'Task Deleted',
-      description: `"${taskToDelete?.description}" removed from your list.`,
+      description: `"${taskToDelete?.name}" removed from your list.`, // Use name in toast
       variant: 'destructive'
     });
   };
 
   const toggleTaskCompletion = (id: string) => {
+    const updatedTask = tasks.find(task => task.id === id);
+    if (!updatedTask) return;
+
     setTasks(
       tasks.map((task) =>
         task.id === id ? { ...task, completed: !task.completed } : task
       )
     );
-    const updatedTask = tasks.find(task => task.id === id);
+
      toast({
-      title: updatedTask?.completed ? 'Task Marked Incomplete' : 'Task Completed!',
-      description: `"${updatedTask?.description}" status updated.`,
+      title: updatedTask.completed ? 'Task Marked Incomplete' : 'Task Completed!',
+      description: `"${updatedTask.name}" status updated.`, // Use name in toast
      });
   };
 
@@ -310,25 +319,34 @@ export function TaskManager() {
                     checked={task.completed}
                     onChange={() => toggleTaskCompletion(task.id)}
                     className="form-checkbox h-5 w-5 text-primary rounded focus:ring-primary cursor-pointer shrink-0"
-                    aria-label={`Mark task ${task.description} as ${task.completed ? 'incomplete' : 'complete'}`}
+                    aria-label={`Mark task ${task.name} as ${task.completed ? 'incomplete' : 'complete'}`} // Use name in aria-label
                   />
                   <div className="flex-grow overflow-hidden">
                     <span
                       className={cn(
-                        "block font-medium truncate",
+                        "block font-semibold truncate", // Changed from font-medium to font-semibold
                         task.completed ? 'line-through text-muted-foreground' : 'text-foreground'
+                      )}
+                      title={task.name} // Use name in title attribute
+                    >
+                      {task.name} {/* Display task name */}
+                    </span>
+                     <span
+                      className={cn(
+                        "block text-sm truncate", // Added description display
+                        task.completed ? 'text-muted-foreground/70' : 'text-muted-foreground'
                       )}
                       title={task.description}
                     >
                       {task.description}
                     </span>
-                    <span className={cn("text-sm", task.completed ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
+                    <span className={cn("text-xs pt-1", task.completed ? 'text-muted-foreground/70' : 'text-muted-foreground')}> {/* Adjusted text size and padding */}
                       Due: {format(task.dueDate, 'PPP')}
                       {isPast(task.dueDate) && !task.completed && (
                          <Badge variant="destructive" className="ml-2">Overdue</Badge>
                       )}
                        {task.priority && !task.completed && (
-                        <Badge variant={task.priority <= 3 ? "default" : "secondary"} className="ml-2" title={task.reason}>
+                        <Badge variant={task.priority <= 3 ? "default" : "secondary"} className="ml-2" title={task.reason ?? undefined}> {/* Ensure title is string or undefined */}
                           P{task.priority}
                         </Badge>
                       )}
@@ -348,7 +366,7 @@ export function TaskManager() {
                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                        <AlertDialogDescription>
                          This action cannot be undone. This will permanently delete the task
-                         "{task.description}".
+                         "{task.name}". {/* Use name in dialog */}
                        </AlertDialogDescription>
                      </AlertDialogHeader>
                      <AlertDialogFooter>
@@ -407,6 +425,19 @@ export function TaskManager() {
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+             <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Task Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g., Project Phoenix Kickoff" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <FormField
                 control={form.control}
                 name="description"
@@ -414,7 +445,7 @@ export function TaskManager() {
                   <FormItem>
                     <FormLabel>Task Description</FormLabel>
                     <FormControl>
-                      <Textarea placeholder="e.g., Finish project report, Buy groceries..." {...field} />
+                      <Textarea placeholder="e.g., Prepare presentation slides, coordinate with team..." {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
