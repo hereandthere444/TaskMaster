@@ -13,7 +13,7 @@ import {
   SidebarMenuButton,
   SidebarInset,
 } from '@/components/ui/sidebar';
-import { Zap, Settings, ListTodo } from 'lucide-react'; // Using relevant icons
+import { Zap, Settings, ListTodo, CalendarDays } from 'lucide-react'; // Added CalendarDays icon
 import { AppLogo } from './app-logo'; // Assuming AppLogo component exists
 import { ThemeToggle } from './theme-toggle'; // Assuming ThemeToggle component exists
 import { Separator } from './ui/separator';
@@ -46,8 +46,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
-             {/* Add other navigation items here if needed */}
-            {/* Example:
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={pathname === '/calendar'}
+                tooltip={{ children: "Calendar", side: 'right' }}
+              >
+                <Link href="/calendar">
+                  <CalendarDays />
+                  Calendar
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            {/* Example of other potential items:
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
