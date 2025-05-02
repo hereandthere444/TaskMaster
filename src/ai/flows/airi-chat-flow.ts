@@ -192,7 +192,7 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
   } catch(error: any) {
       console.error("[airiChat] Flow execution error:", error);
       return {
-          response: "Hmph. Something went terribly wrong on my end. I couldn't even process that properly. Maybe try again later?",
+          response: `Hmph. Something went terribly wrong on my end. I couldn't even process that properly. Error: ${error.message || 'Unknown error'} Try again, maybe?`,
           createdTask: undefined, // Ensure fields are present even on error
           prioritizedTasks: undefined,
           success: false,
@@ -235,7 +235,8 @@ const airiChatFlow = ai.defineFlow<
     console.log("[airiChatFlow] Calling LLM with messages structure...");
     const llmResponse = await ai.generate({
       prompt: [
-          { role: 'system', content: [{ text: airiSystemPrompt }] }, // System prompt
+          // System prompt content should be a string, not an array of objects
+          { role: 'system', content: airiSystemPrompt },
           { role: 'user', content: userMessageParts }             // User message parts
       ],
       tools: [addTaskTool, prioritizeTasksTool],       // Available tools
