@@ -28,7 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/componen
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Trash2, Sparkles, Zap, Calendar as CalendarIcon, Mic, MicOff, Clock, Bot, SendHorizontal, User } from 'lucide-react'; // Added Bot, SendHorizontal, User; Removed Mic related if not needed elsewhere
+import { Trash2, Sparkles, Zap, Calendar as CalendarIcon, Clock, Bot, SendHorizontal, User } from 'lucide-react'; // Added Bot, SendHorizontal, User; Removed Mic related
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
@@ -72,6 +72,7 @@ interface ChatMessage {
     timestamp: Date;
     // Optional: include task data if relevant to the message
     taskData?: PrioritizedTask | { name: string; priority?: number; reason?: string }[];
+    isError?: boolean; // Flag for error messages
 }
 
 const taskFormSchema = z.object({
@@ -84,8 +85,23 @@ const taskFormSchema = z.object({
 type TaskFormData = z.infer<typeof taskFormSchema>;
 
 // --- Motivational/Taunting Messages (Keep as before) ---
-const motivationalMessages = [ /* ... keep existing messages ... */ ];
-const tauntingMessages = [ /* ... keep existing messages ... */ ];
+const motivationalMessages = [
+    "Get this goal done, or else...",
+    "Stop procrastinating on this goal!",
+    "This goal isn't going to complete itself...",
+    "Are you even trying to achieve this goal?",
+    "Tick-tock... this goal's deadline is approaching.",
+    "Don't let this important goal slip away!",
+];
+const tauntingMessages = [
+    "Still haven't finished this? Pathetic.",
+    "I expected better from you regarding this task.",
+    "At this rate, you'll never finish this.",
+    "Is this task too hard for you?",
+    "Maybe you should just give up on this one.",
+    "I'm starting to doubt your abilities.",
+];
+
 
 // --- DateTimePicker Component (Keep as before) ---
 function DateTimePicker({ value, onChange, disabled }: { value: Date | undefined; onChange: (date: Date | undefined) => void; disabled?: (date: Date) => boolean }) {
@@ -100,14 +116,16 @@ function DateTimePicker({ value, onChange, disabled }: { value: Date | undefined
         setHour12(format(value, 'hh'));
         setMinute(format(value, 'mm'));
         setPeriod(format(value, 'a') as 'AM' | 'PM');
-      } else {
+      } else if (!value) { // Set default only if value is initially undefined
         const defaultDate = setMinutes(setHours(new Date(), 9), 0);
         setSelectedDate(startOfDay(defaultDate));
         setHour12('09');
         setMinute('00');
         setPeriod('AM');
-        // if (!value) onChange(defaultDate); // Removed to avoid potential loops if onChange was in deps
+        // Do NOT call onChange here to avoid setting form state before user interaction
+        // onChange(defaultDate); // Removed
       }
+    // Update only when the external `value` changes explicitly
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [value]);
 
@@ -124,6 +142,8 @@ function DateTimePicker({ value, onChange, disabled }: { value: Date | undefined
             const newDateTime = setMinutes(setHours(newDate, hour24), minuteVal);
             if (isValid(newDateTime)) onChange(newDateTime);
             else console.error("Generated invalid date in DateTimePicker:", { newDate, hour24, minuteVal });
+        } else {
+             console.error("Invalid time components:", { newHour12, newMinute, newPeriod });
         }
     };
 
@@ -186,6 +206,7 @@ export function TaskManager() {
   const [chatInput, setChatInput] = React.useState('');
   const [isChatOpen, setIsChatOpen] = React.useState(false); // State for chat sheet
   const chatScrollAreaRef = React.useRef<HTMLDivElement>(null);
+  const chatInputFieldRef = React.useRef<HTMLInputElement>(null); // Ref for input field
 
   const { toast } = useToast();
   const notificationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -202,49 +223,126 @@ export function TaskManager() {
   // --- useEffect Hooks (Keep Load/Save and Force Mode as before) ---
   React.useEffect(() => {
     // Load tasks logic (no changes needed)
+    setIsLoadingTasks(true); // Set loading true at the start
     try {
       const savedTasks = localStorage.getItem('tasks');
       if (savedTasks) {
           const parsedTasks: PrioritizedTask[] = JSON.parse(savedTasks).map((task: any) => {
             let parsedDate = task.dueDate ? parseISO(task.dueDate) : null;
             if (!parsedDate || !isValid(parsedDate)) {
-                console.warn(`Invalid or missing dueDate for task "${task.name}". Defaulting to now.`);
+                console.warn(`Invalid or missing dueDate for task "${task.name || task.id}". Defaulting to now.`);
                 parsedDate = new Date();
             }
-              return { ...task, name: task.name || task.description, dueDate: parsedDate };
-          });
+              return {
+                  ...task,
+                  name: task.name || task.description || `Task ${task.id}`, // Ensure name exists
+                  dueDate: parsedDate,
+                  category: task.category || 'goal', // Default category
+                  completed: !!task.completed, // Ensure boolean
+              };
+          }).sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()); // Sort after loading
           setTasks(parsedTasks);
+          console.log("Tasks loaded from localStorage:", parsedTasks.length);
+      } else {
+         console.log("No tasks found in localStorage.");
       }
-    } catch (error) { /* ... error handling ... */ }
-    finally { setIsLoadingTasks(false); }
-   }, [toast]);
+    } catch (error) {
+        console.error('Failed to load tasks from localStorage:', error);
+        toast({
+            title: 'Error Loading Tasks',
+            description: 'Could not load tasks from local storage.',
+            variant: 'destructive',
+        });
+    } finally {
+        setIsLoadingTasks(false); // Set loading false at the end
+    }
+   }, [toast]); // Only depends on toast
 
   React.useEffect(() => {
     // Save tasks logic (no changes needed)
       if (!isLoadingTasks) {
           try {
+              // Convert Date objects back to ISO strings for storage
               const tasksToSave = tasks.map(task => ({ ...task, dueDate: task.dueDate.toISOString() }));
               localStorage.setItem('tasks', JSON.stringify(tasksToSave));
-          } catch (error) { /* ... error handling ... */ }
+              console.log("Tasks saved to localStorage:", tasksToSave.length);
+          } catch (error) {
+              console.error('Failed to save tasks to localStorage:', error);
+              toast({
+                title: 'Error Saving Tasks',
+                description: 'Could not save tasks to local storage.',
+                variant: 'destructive',
+              });
+          }
       }
   }, [tasks, isLoadingTasks, toast]);
 
   React.useEffect(() => {
-    // Force mode logic (no changes needed in the notification sending part)
-    if (forceMode) { /* ... interval setup ... */ }
-    else { /* ... interval cleanup ... */ }
-    return () => { /* ... interval cleanup on unmount ... */ };
-  }, [forceMode, tasks, toast]);
+    // Force mode logic
+    if (forceMode) {
+      notificationIntervalRef.current = setInterval(() => {
+        const incompleteGoals = tasks.filter(task => task.category === 'goal' && !task.completed);
+        const incompleteChores = tasks.filter(task => task.category === 'chore' && !task.completed);
+
+        if (incompleteGoals.length > 0) {
+          const randomGoal = incompleteGoals[Math.floor(Math.random() * incompleteGoals.length)];
+          const randomTaunt = tauntingMessages[Math.floor(Math.random() * tauntingMessages.length)];
+          const message = `🚨 ${randomTaunt} Finish goal: "${randomGoal.name}" (Due: ${format(randomGoal.dueDate, 'Pp')})`;
+          sendPersistentNotification(message);
+          toast({
+            title: '🚨 Force Mode Reminder!',
+            description: message,
+            variant: 'destructive',
+          });
+        } else if (incompleteChores.length > 0) {
+             // Send simple reminder for chores if no goals are pending
+             const randomChore = incompleteChores[Math.floor(Math.random() * incompleteChores.length)];
+             const message = `🔔 Reminder: Don't forget the chore: "${randomChore.name}" (Due: ${format(randomChore.dueDate, 'Pp')})`;
+             sendPersistentNotification(message);
+             toast({
+               title: '🔔 Chore Reminder',
+               description: message,
+             });
+        }
+      }, 60000); // Every 60 seconds
+      toast({ title: '⚡ Force Mode Activated!', description: 'Persistent goal reminders are ON.' });
+    } else {
+      if (notificationIntervalRef.current) {
+        clearInterval(notificationIntervalRef.current);
+        notificationIntervalRef.current = null;
+        toast({ title: '⚡ Force Mode Deactivated.', description: 'Persistent reminders are OFF.' });
+      }
+    }
+    return () => {
+      if (notificationIntervalRef.current) {
+        clearInterval(notificationIntervalRef.current);
+      }
+    };
+  }, [forceMode, tasks, toast]); // Re-run if forceMode or tasks change
 
 
   // --- Chat Handling ---
 
-  // Scroll to bottom of chat messages when new messages are added
+  // Scroll to bottom of chat messages when new messages are added or chat opens
   React.useEffect(() => {
-    if (chatScrollAreaRef.current) {
-        chatScrollAreaRef.current.scrollTo({ top: chatScrollAreaRef.current.scrollHeight, behavior: 'smooth' });
+    if (isChatOpen && chatScrollAreaRef.current) {
+        // Delay scroll slightly to ensure DOM updates are complete
+        setTimeout(() => {
+            chatScrollAreaRef.current?.scrollTo({ top: chatScrollAreaRef.current.scrollHeight, behavior: 'smooth' });
+        }, 100); // 100ms delay might need adjustment
     }
-  }, [chatMessages]);
+  }, [chatMessages, isChatOpen]);
+
+  // Focus input when chat opens
+    React.useEffect(() => {
+        if (isChatOpen) {
+            // Delay focus slightly to ensure sheet animation is complete
+            setTimeout(() => {
+                chatInputFieldRef.current?.focus();
+            }, 300); // Adjust delay as needed
+        }
+    }, [isChatOpen]);
+
 
   const handleChatSubmit = async (e?: React.FormEvent<HTMLFormElement>) => {
       e?.preventDefault(); // Prevent form submission if used in a form
@@ -258,16 +356,18 @@ export function TaskManager() {
           timestamp: new Date(),
       };
 
+      // Add user message and clear input immediately
       setChatMessages((prev) => [...prev, newUserMessage]);
-      setChatInput(''); // Clear input immediately
-      setIsLoadingAI(true);
+      setChatInput('');
+      setIsLoadingAI(true); // Set loading state
 
       try {
+          console.log("[TaskManager] Sending to Airi:", { messageText, taskCount: tasks.length });
           // Prepare input for Airi, including current tasks if relevant intent suspected
-          // The AI determines if tasks are needed based on the prompt.
           const airiInput: AiriChatInput = {
               message: messageText,
-              currentTasks: tasks.map(t => ({ // Send simplified task structure
+              // Send simplified, non-completed task structure for context
+              currentTasks: tasks.filter(t => !t.completed).map(t => ({
                   id: t.id,
                   name: t.name,
                   description: t.description,
@@ -278,94 +378,126 @@ export function TaskManager() {
           };
 
           const airiOutput: AiriChatOutput = await airiChat(airiInput);
+          console.log("[TaskManager] Received from Airi:", airiOutput);
 
-          const newAiriMessage: ChatMessage = {
-              id: crypto.randomUUID(),
-              sender: 'airi',
-              text: airiOutput.response || "...", // Default response if empty
-              timestamp: new Date(),
-          };
+          // Default message structure
+           let newAiriMessage: ChatMessage = {
+               id: crypto.randomUUID(),
+               sender: 'airi',
+               text: airiOutput.response || "...", // Default response if empty
+               timestamp: new Date(),
+               isError: !airiOutput.success, // Mark as error if success is false
+           };
 
-          // Handle side effects based on Airi's output
-          if (airiOutput.createdTask) {
-              // Add the task created by Airi
-              // The flow output `createdTask` should already have dueDate as a Date object after post-processing
-              const newTask = airiOutput.createdTask; // Type should be PrioritizedTask
-              setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()));
-              newAiriMessage.taskData = newTask; // Attach task data to message for potential rendering
-              toast({
-                  title: `✅ Airi added task: ${newTask.name}`,
-                  description: `Due: ${format(newTask.dueDate, 'Pp')}`,
-              });
-          }
-
-          if (airiOutput.prioritizedTasks && airiOutput.prioritizedTasks.length > 0) {
-              // Update task list with new priorities/reasons from Airi
-              const priorityMap = new Map(airiOutput.prioritizedTasks.map(p => [p.name, p])); // Use name as key (assuming unique for this batch)
-              const updatedTasks = tasks.map(task => {
-                  const priorityData = priorityMap.get(task.name); // Match by name
-                  return priorityData
-                     ? { ...task, priority: priorityData.priority, reason: priorityData.reason }
-                     : task;
-                }).sort((a, b) => {
-                    const priorityDiff = (a.priority ?? Infinity) - (b.priority ?? Infinity);
-                    if (priorityDiff !== 0) return priorityDiff;
-                    const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
-                    const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
-                    return dateA - dateB;
-                });
-              setTasks(updatedTasks);
-               newAiriMessage.taskData = airiOutput.prioritizedTasks; // Attach prioritization summary
-               toast({
-                 title: '✨ Airi prioritized your tasks!',
-                 description: 'Check the list for the new order and reasons.',
-               });
-          }
-
+           // Handle specific errors reported by the flow
            if (!airiOutput.success && airiOutput.error) {
-               newAiriMessage.text = `Hmph. Something went wrong: ${airiOutput.error}`; // Show error in chat
+               console.error("[TaskManager] Airi flow returned an error:", airiOutput.error);
+               newAiriMessage.text = `Hmph. ${airiOutput.error} Try again, maybe?`; // Use error in response
                toast({
-                   title: 'Airi Malfunction!',
+                   title: 'Airi Error',
                    description: airiOutput.error,
                    variant: 'destructive',
                });
            }
+           // Handle successful response with potential side effects
+           else if (airiOutput.success) {
+                // Handle created task
+                if (airiOutput.createdTask) {
+                    const newTask = airiOutput.createdTask; // Type should be PrioritizedTask
+                     // Basic validation
+                     if (newTask.id && newTask.name && newTask.dueDate && isValid(newTask.dueDate)) {
+                         setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()));
+                         newAiriMessage.taskData = newTask;
+                         toast({
+                             title: `✅ Airi added task: ${newTask.name}`,
+                             description: `Due: ${format(newTask.dueDate, 'Pp')}`,
+                         });
+                     } else {
+                         console.warn("[TaskManager] Airi returned an invalid task structure:", newTask);
+                         newAiriMessage.text += " (But I couldn't add the task, the details were wrong.)";
+                         toast({
+                            title: 'Task Creation Issue',
+                            description: 'Airi tried to add a task, but the details were incomplete or invalid.',
+                            variant: 'destructive',
+                         });
+                     }
+                }
 
+                // Handle prioritized tasks
+                if (airiOutput.prioritizedTasks && airiOutput.prioritizedTasks.length > 0) {
+                     const priorityMap = new Map(airiOutput.prioritizedTasks.map(p => [p.name, p]));
+                     let tasksUpdated = 0;
+                     const updatedTasks = tasks.map(task => {
+                         const priorityData = priorityMap.get(task.name);
+                         if (priorityData && !task.completed) {
+                             tasksUpdated++;
+                             return { ...task, priority: priorityData.priority, reason: priorityData.reason };
+                         }
+                         return task; // Keep existing priority/reason if not in the new list or if completed
+                     }).sort((a, b) => {
+                         const priorityA = a.priority ?? Infinity;
+                         const priorityB = b.priority ?? Infinity;
+                         if (priorityA !== priorityB) return priorityA - priorityB;
+                         const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
+                         const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
+                         return dateA - dateB;
+                     });
 
+                     if (tasksUpdated > 0) {
+                         setTasks(updatedTasks);
+                         newAiriMessage.taskData = airiOutput.prioritizedTasks;
+                         toast({
+                             title: '✨ Airi prioritized your tasks!',
+                             description: `Updated priorities for ${tasksUpdated} task(s).`,
+                         });
+                     } else {
+                         console.warn("[TaskManager] Airi returned prioritization data, but no matching incomplete tasks found.");
+                         // Optionally inform the user in chat if desired
+                     }
+                 }
+           }
+
+          // Add Airi's message (normal or error) to the chat
           setChatMessages((prev) => [...prev, newAiriMessage]);
 
-      } catch (error) {
+      } catch (error: any) {
           console.error('Error communicating with Airi:', error);
           const errorResponseMessage: ChatMessage = {
               id: crypto.randomUUID(),
               sender: 'airi',
-              text: "Hmph. I couldn't process that. Maybe try again?",
+              text: "Hmph. Something went seriously wrong trying to reach me. Check your connection or try again later.",
               timestamp: new Date(),
+              isError: true,
           };
           setChatMessages((prev) => [...prev, errorResponseMessage]);
           toast({
-              title: 'Chat Error',
-              description: 'Could not get a response from Airi.',
+              title: 'Chat Connection Error',
+              description: error.message || 'Could not get a response from Airi.',
               variant: 'destructive',
           });
       } finally {
-          setIsLoadingAI(false);
-          // Ensure input focus is maintained or returned after interaction
-          // Might need ref to input field
+          setIsLoadingAI(false); // Ensure loading state is reset
+           // Refocus input field after processing
+          setTimeout(() => chatInputFieldRef.current?.focus(), 0);
       }
   };
 
   // --- Task Form Submission (Keep as before) ---
   async function onSubmit(data: TaskFormData) {
     let finalDueDate = data.dueDate;
-    if (!finalDueDate || !isValid(finalDueDate)) { /* ... validation ... */ return; }
+    // Ensure date is valid before creating task
+    if (!finalDueDate || !isValid(finalDueDate)) {
+        toast({ title: "Invalid Date", description: "Please select a valid due date and time.", variant: "destructive" });
+        console.error("Form submission prevented due to invalid date:", data.dueDate);
+        return; // Prevent submission
+    }
     const newTask: PrioritizedTask = {
       id: crypto.randomUUID(),
       name: data.name, description: data.description, dueDate: finalDueDate,
       category: data.category, completed: false,
     };
     setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()));
-    form.reset({ name: '', description: '', dueDate: undefined, category: 'goal' });
+    form.reset({ name: '', description: '', dueDate: undefined, category: 'goal' }); // Reset with undefined date
     toast({ title: "Task Added", description: `"${data.name}" added. Due: ${format(finalDueDate, 'Pp')}` });
   }
 
@@ -386,9 +518,18 @@ export function TaskManager() {
         if (task.id === id) {
             toggledTaskName = task.name;
             isNowCompleted = !task.completed;
-            return { ...task, completed: !task.completed };
+             // Reset priority/reason when completing, keep when un-completing
+            const priorityUpdates = isNowCompleted ? { priority: undefined, reason: undefined } : {};
+            return { ...task, completed: !task.completed, ...priorityUpdates };
         }
         return task;
+      }).sort((a, b) => { // Re-sort after toggling completion
+          const priorityA = a.priority ?? Infinity;
+          const priorityB = b.priority ?? Infinity;
+          if (priorityA !== priorityB) return priorityA - priorityB;
+          const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
+          const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
+          return dateA - dateB;
       })
     );
     if (toggledTaskName && isNowCompleted !== undefined) {
@@ -412,8 +553,15 @@ export function TaskManager() {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {isLoadingTasks ? ( /* ... skeleton ... */ ''
-        ) : taskList.length === 0 ? ( /* ... empty state ... */ ''
+        {isLoadingTasks ? (
+          <div className="space-y-4">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+          </div>
+        ) : taskList.length === 0 ? (
+           <p className="text-muted-foreground italic text-center py-4">
+                {title.includes('Completed') ? 'No tasks completed yet.' : `No ${title.toLowerCase()} found.`}
+           </p>
         ) : (
           <ul className="space-y-3">
             {taskList.map((task) => {
@@ -421,20 +569,23 @@ export function TaskManager() {
                const formattedDueDate = isDueDateValid ? format(task.dueDate, 'Pp') : 'Invalid Date';
                const isTaskOverdue = isDueDateValid && isPast(task.dueDate) && !task.completed;
                return (
-                <li key={task.id} className={cn("flex items-start md:items-center justify-between p-4 rounded-lg border transition-all duration-200 group", task.completed ? 'bg-secondary/30 border-dashed' : 'bg-card hover:bg-accent/40 hover:border-primary/50', isTaskOverdue ? 'border-destructive shadow-sm shadow-destructive/20' : 'border-border')}>
+                <li key={task.id} className={cn("flex items-start md:items-center justify-between p-4 rounded-lg border transition-all duration-200 group", task.completed ? 'bg-secondary/30 border-dashed opacity-70' : 'bg-card hover:bg-accent/40 hover:border-primary/50', isTaskOverdue ? 'border-destructive shadow-sm shadow-destructive/20' : 'border-border')}>
                   <div className="flex items-start space-x-4 flex-grow mr-2 overflow-hidden">
                      <input type="checkbox" checked={task.completed} onChange={() => toggleTaskCompletion(task.id)} className="form-checkbox h-6 w-6 text-primary rounded-md border-gray-300 focus:ring-primary cursor-pointer mt-1 shrink-0" aria-label={`Mark task ${task.name} as ${task.completed ? 'incomplete' : 'complete'}`} />
                     <div className="flex-grow overflow-hidden pt-0.5">
                       <span className={cn("block font-semibold text-base truncate", task.completed ? 'line-through text-muted-foreground/80' : 'text-foreground')} title={task.name}>
                         {task.name}
-                         {task.priority && !task.completed && ( <Badge variant={task.priority <= 2 ? "destructive" : task.priority <= 5 ? "default" : "secondary"} className="ml-2 align-middle text-xs" title={task.reason ? `Priority Reason: ${task.reason}` : `Priority: ${task.priority}`}>🔥 P{task.priority}</Badge> )}
+                         {task.priority && !task.completed && ( <Badge variant={task.priority <= 2 ? "destructive" : task.priority <= 5 ? "default" : "secondary"} className="ml-2 align-middle text-xs cursor-help" title={task.reason ? `Priority Reason: ${task.reason}` : `Priority: ${task.priority}`}>🔥 P{task.priority}</Badge> )}
                       </span>
-                       <span className={cn("block text-sm mt-1 truncate", task.completed ? 'text-muted-foreground/60' : 'text-muted-foreground')} title={task.description}> {task.description} </span>
+                       <span className={cn("block text-sm mt-1 truncate", task.completed ? 'text-muted-foreground/60 line-through' : 'text-muted-foreground')} title={task.description}> {task.description} </span>
                       <div className={cn("text-xs mt-2 flex items-center gap-2 flex-wrap", task.completed ? 'text-muted-foreground/60' : 'text-muted-foreground')}>
-                        <span className="flex items-center gap-1"><CalendarIcon className="h-3 w-3" />Due: {formattedDueDate}</span>
+                        <span className={cn("flex items-center gap-1", isTaskOverdue && !task.completed ? "text-destructive font-medium" : "")}><CalendarIcon className="h-3 w-3" />Due: {formattedDueDate}</span>
                         {isTaskOverdue && (<Badge variant="destructive" className="text-xs px-1.5 py-0.5">🚨 Overdue</Badge>)}
-                         <Badge variant="outline" className="capitalize text-xs px-1.5 py-0.5">{task.category}</Badge>
+                         <Badge variant="outline" className={cn("capitalize text-xs px-1.5 py-0.5", task.completed && "opacity-60")}>{task.category}</Badge>
                       </div>
+                      {task.reason && !task.completed && (
+                          <p className="text-xs mt-1.5 text-amber-700 dark:text-amber-500 italic pl-1">💡 Reason: {task.reason}</p>
+                      )}
                     </div>
                   </div>
                    <AlertDialog>
@@ -458,7 +609,8 @@ export function TaskManager() {
       <header className="mb-8 flex flex-col sm:flex-row items-center justify-between gap-4 border-b pb-4">
         <div className="flex items-center gap-2">
            <h1 className="text-3xl font-bold text-primary flex items-center gap-2">
-             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-7 h-7"><path d="M15 6.002v12m-6-12v12M19 8.002H5M19 16H5"/></svg>
+             {/* Simple Hashtag/Grid icon */}
+             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-7 h-7"><path d="M10 3L4 9M14 3l6 6M3 10v10c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V10M17 14l-5 5-5-5M12 19V9"/></svg>
              TaskMaster
            </h1>
         </div>
@@ -471,7 +623,8 @@ export function TaskManager() {
                       <Bot className="mr-2 h-5 w-5" /> Ask Airi
                   </Button>
               </SheetTrigger>
-              <SheetContent className="w-full max-w-md flex flex-col p-0" side="right">
+              {/* Adjust side and potentially width constraints */}
+              <SheetContent className="w-full max-w-lg flex flex-col p-0" side="right">
                  <SheetHeader className="p-6 pb-4 border-b">
                       <SheetTitle className="flex items-center gap-2 text-xl">
                           <Bot className="h-6 w-6 text-primary" /> Chat with Airi
@@ -481,15 +634,29 @@ export function TaskManager() {
                       </SheetDescription>
                  </SheetHeader>
                   {/* Chat Messages Area */}
-                  <ScrollArea className="flex-grow p-4" ref={chatScrollAreaRef}>
-                     <div className="space-y-4">
+                  <ScrollArea className="flex-grow p-4" viewportRef={chatScrollAreaRef}> {/* Use viewportRef */}
+                     <div className="space-y-4 pb-4"> {/* Add padding bottom */}
+                         {/* Initial message from Airi */}
+                         {chatMessages.length === 0 && (
+                            <div className={cn("flex items-end gap-2 justify-start")}>
+                                <Bot className="h-6 w-6 text-primary shrink-0 mb-1" />
+                                <div className={cn("rounded-lg p-3 max-w-[80%]", 'bg-muted text-muted-foreground')}>
+                                    <p className="text-sm">Hmph. What do you want? Ask me something, I guess.</p>
+                                    <p className="text-xs mt-1 opacity-70 text-right">{format(new Date(), 'p')}</p>
+                                </div>
+                            </div>
+                         )}
                           {chatMessages.map((msg) => (
                               <div key={msg.id} className={cn("flex items-end gap-2", msg.sender === 'user' ? 'justify-end' : 'justify-start')}>
                                   {msg.sender === 'airi' && <Bot className="h-6 w-6 text-primary shrink-0 mb-1" />}
-                                  <div className={cn("rounded-lg p-3 max-w-[80%]", msg.sender === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground')}>
-                                      <p className="text-sm">{msg.text}</p>
-                                      {/* Optionally render task data if present */}
-                                      {/* {msg.taskData && <pre className="text-xs mt-2 bg-background/50 p-1 rounded">{JSON.stringify(msg.taskData, null, 2)}</pre>} */}
+                                  <div className={cn(
+                                      "rounded-lg p-3 max-w-[85%]", // Increased max width slightly
+                                      msg.sender === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+                                      msg.isError && msg.sender === 'airi' ? 'bg-destructive/20 text-destructive-foreground border border-destructive' : '' // Style for errors
+                                      )}>
+                                      <p className="text-sm whitespace-pre-wrap">{msg.text}</p> {/* Allow wrapping */}
+                                      {/* Optional rendering for task/priority data */}
+                                      {/* {msg.taskData && ... } */}
                                       <p className="text-xs mt-1 opacity-70 text-right">{format(msg.timestamp, 'p')}</p>
                                   </div>
                                    {msg.sender === 'user' && <User className="h-6 w-6 text-muted-foreground shrink-0 mb-1" />}
@@ -497,7 +664,7 @@ export function TaskManager() {
                           ))}
                           {isLoadingAI && (
                               <div className="flex items-center gap-2 justify-start">
-                                  <Bot className="h-6 w-6 text-primary shrink-0" />
+                                  <Bot className="h-6 w-6 text-primary shrink-0 animate-pulse" />
                                   <Skeleton className="h-10 w-20 rounded-lg bg-muted" />
                               </div>
                           )}
@@ -507,6 +674,7 @@ export function TaskManager() {
                   <SheetFooter className="p-4 border-t bg-background">
                       <form onSubmit={handleChatSubmit} className="flex items-center gap-2 w-full">
                           <Input
+                              ref={chatInputFieldRef} // Add ref
                               type="text"
                               placeholder="Ask Airi..."
                               value={chatInput}
@@ -545,7 +713,22 @@ export function TaskManager() {
              <FormField control={form.control} name="name" render={({ field }) => ( <FormItem><FormLabel>Task Name</FormLabel><FormControl><Input placeholder="e.g., Finish project report" {...field} /></FormControl><FormMessage /></FormItem> )} />
               <FormField control={form.control} name="description" render={({ field }) => ( <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea placeholder="e.g., Include Q3 data, proofread, and send to manager..." {...field} rows={3} /></FormControl><FormMessage /></FormItem> )} />
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 <FormField control={form.control} name="dueDate" render={({ field }) => ( <FormItem className="flex flex-col"><FormLabel>Due Date & Time</FormLabel><DateTimePicker value={field.value} onChange={field.onChange} disabled={(date) => date < startOfDay(new Date())} /><FormMessage /></FormItem> )} />
+                 {/* Updated DateTimePicker usage */}
+                 <FormField
+                      control={form.control}
+                      name="dueDate"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-col">
+                          <FormLabel>Due Date & Time</FormLabel>
+                           <DateTimePicker
+                               value={field.value}
+                               onChange={field.onChange}
+                               disabled={(date) => date < startOfDay(new Date())}
+                           />
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                  />
                     <FormField control={form.control} name="category" render={({ field }) => ( <FormItem><FormLabel>Category</FormLabel><FormControl>
                               <div className="flex space-x-4 pt-2">
                                 <Label htmlFor="goal-radio" className={cn( "flex items-center space-x-2 cursor-pointer rounded-md border p-3 transition-colors hover:bg-accent", field.value === 'goal' && "bg-primary/10 border-primary" )}>
