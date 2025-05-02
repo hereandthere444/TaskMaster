@@ -4,10 +4,8 @@ import { CalendarView } from '@/components/calendar-view';
 export default function CalendarPage() {
   return (
     <AppShell>
-      {/* Ensure CalendarView can expand */}
-      <div className="flex flex-grow">
-        <CalendarView />
-      </div>
+      {/* CalendarView now handles its own growth within AppShell's flex container */}
+      <CalendarView />
     </AppShell>
   );
 }

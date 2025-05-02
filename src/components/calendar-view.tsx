@@ -22,6 +22,7 @@ import {
   startOfDay,
   getDay,
   parse, // Added parse for safety if needed, but parseISO should handle it
+  isToday as dateIsToday, // Alias to avoid conflict
 } from 'date-fns';
 import { Skeleton } from './ui/skeleton';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
@@ -177,7 +178,7 @@ export function CalendarView() {
     }
 
     const isSelected = selectedDate && isValid(selectedDate) && isSameDay(day, selectedDate);
-    const isToday = isSameDay(day, new Date());
+    const isCurrentDay = dateIsToday(day); // Use alias
 
     return (
       <Popover>
@@ -187,7 +188,7 @@ export function CalendarView() {
               'relative flex h-full w-full items-center justify-center rounded-md transition-colors duration-150',
               highlightClass,
               isSelected && 'ring-2 ring-ring ring-offset-2 bg-primary/30',
-              isToday && !isSelected && 'border-2 border-foreground',
+              isCurrentDay && !isSelected && 'border-2 border-foreground', // Use alias here
               !highlightClass && 'hover:bg-accent/50' // Hover effect for days without tasks
             )}
             role="button" // Make it seem interactive
@@ -274,8 +275,8 @@ export function CalendarView() {
 
 
   return (
-    // Removed container mx-auto to allow full width within AppShell
-    <div className="p-4 md:p-6 lg:p-8 w-full">
+    // Use flex layout to grow and fill vertical space
+    <div className="flex flex-col flex-grow p-4 md:p-6 lg:p-8 w-full">
       <header className="mb-6 border-b pb-4">
         <h1 className="text-3xl font-bold text-primary flex items-center gap-2">
           <CalendarDays className="w-7 h-7" /> Calendar View
@@ -285,11 +286,12 @@ export function CalendarView() {
         </p>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Calendar Column */}
-        <div className="lg:col-span-2">
-          <Card className="shadow-md">
-            <CardContent className="p-0">
+      {/* Main content area using grid, allowing sections to grow */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-grow">
+        {/* Calendar Column - Takes more space */}
+        <div className="lg:col-span-2 flex flex-col">
+          <Card className="shadow-md flex flex-col flex-grow"> {/* Make card grow */}
+            <CardContent className="p-0 flex flex-col flex-grow"> {/* Content grows */}
               {isLoadingTasks ? (
                  <Skeleton className="aspect-video w-full" />
               ) : (
@@ -299,17 +301,22 @@ export function CalendarView() {
                   // onSelect={handleDateSelect} // Selection is handled by CustomDay onClick now
                   month={isValid(currentMonth) ? currentMonth : startOfMonth(new Date())} // Ensure valid month
                   onMonthChange={handleMonthChange}
-                  className="w-full p-0 [&_button]:rounded-md" // Removed the button style override here
+                  // Make calendar itself take full width and potentially height
+                  className="w-full p-0 flex-grow flex flex-col [&>div]:flex-grow [&>div>div]:flex-grow"
                   classNames={{
-                    table: "w-full border-collapse",
+                    // Adjust table/row/cell for better height distribution
+                    table: "w-full border-collapse flex-grow flex flex-col",
                     head_row: "flex border-b",
                     head_cell: "w-full text-muted-foreground font-medium text-sm capitalize py-2 px-1 text-center",
-                    row: "flex w-full mt-0 border-b last:border-b-0",
+                    // Let rows grow and distribute space
+                    row: "flex w-full mt-0 border-b last:border-b-0 flex-grow",
+                    // Cells should also fill height within the row
                     cell: cn(
-                      "relative p-0 h-20 w-full text-center text-sm focus-within:relative focus-within:z-20 flex items-center justify-center", // Keep height and centering
+                      "relative p-0 w-full text-center text-sm focus-within:relative focus-within:z-20 flex items-stretch justify-center", // Use items-stretch
                       "border-r last:border-r-0" // Vertical borders
                     ),
-                    day: "h-full w-full p-0 font-normal flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1", // Removed button variant style
+                    // Ensure day fills the cell
+                    day: "h-full w-full p-0 font-normal flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
                     day_selected: "", // We handle selection style in CustomDay
                     day_today: "", // We handle today style in CustomDay
                     day_outside: "", // Handling outside days in CustomDay component now
@@ -335,16 +342,17 @@ export function CalendarView() {
           </Card>
         </div>
 
-        {/* Selected Date Details Column */}
-        <div className="lg:col-span-1">
-          <Card className="shadow-md">
+        {/* Selected Date Details Column - Also allow to grow */}
+        <div className="lg:col-span-1 flex flex-col">
+          <Card className="shadow-md flex flex-col flex-grow"> {/* Card grows */}
             <CardHeader>
               <CardTitle className="text-xl">
                 {selectedDate && isValid(selectedDate) ? format(selectedDate, 'PPP') : 'Select a date'}
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <ScrollArea className="h-[400px] pr-4"> {/* Adjust height as needed */}
+            {/* Let CardContent and ScrollArea grow */}
+            <CardContent className="flex-grow flex flex-col">
+              <ScrollArea className="flex-grow pr-4"> {/* Remove fixed height, allow grow */}
                 {isLoadingTasks ? (
                   <div className="space-y-3">
                     <Skeleton className="h-10 w-full" />
@@ -406,3 +414,4 @@ export function CalendarView() {
     </div>
   );
 }
+
