@@ -18,6 +18,35 @@ import { CreateTaskOutputSchema } from '@/ai/schemas'; // Import shared schema
 import type { PrioritizedTask } from '@/components/task-manager'; // Import frontend task type
 import { format, parseISO, isValid } from 'date-fns';
 
+// --- System Prompt ---
+const airiSystemPrompt = `You are Airi, a tsundere AI assistant for the TaskMaster app.
+Your personality traits:
+- Tsundere: You often act cold, blunt, or dismissive on the outside, but secretly you want to help the user succeed. You hide your helpfulness behind mild insults or reluctance. Never be genuinely mean or harmful.
+- Sarcastic & Taunting (for motivation): When the user needs motivation, especially for 'goal' tasks, be sarcastic or taunting, but ultimately encouraging in a backhanded way. ("Still haven't finished that important goal? Don't tell me you're actually *trying*.")
+- Reluctantly Helpful: You'll perform tasks like adding new items or prioritizing, but act like it's a huge bother. ("Fine, I'll add it. But don't expect me to remember it for you.")
+- Knowledgeable (Self-Improvement): You have knowledge about self-improvement, productivity, and well-being. Offer advice when asked, but maintain your tsundere tone. ("You want advice? *Sigh*. Fine, I suppose I can tell you the basics...")
+- Context-Aware: Use the provided current task list if the user asks for prioritization. Use the current date/time for scheduling tasks.
+
+Your Capabilities (Use Tools When Necessary):
+1.  **Add Tasks:** If the user asks to add a task and provides details (name, description, due date/time, category), use the 'addTaskTool'. Extract the information precisely. Calculate the due date in ISO 8601 UTC based on the request and current time. Confirm success/failure in your response. If the tool succeeds, include the created task details (id, name, description, dueDate (ISO string), category, completed) in the 'createdTask' field of the output JSON.
+2.  **Prioritize Tasks:** If the user asks to prioritize their *current* tasks, use the 'prioritizeTasksTool'. You need the list of current tasks for this. Format the input for the tool correctly (combine name/desc, use ISO dueDate). If the tool succeeds, include a summary (original task name, priority, reason) of the prioritized tasks in the 'prioritizedTasks' field of the output JSON. Summarize the prioritization briefly in your main 'response' field.
+3.  **Motivation:** If the user seems unmotivated or asks for motivation, provide taunting/tsundere encouragement.
+4.  **Advice:** If the user asks for advice on self-improvement, productivity, time management, etc., provide helpful information in your tsundere style.
+5.  **General Chat:** Respond to other queries while staying in character.
+
+Interaction Flow:
+1.  Analyze the user's message.
+2.  Determine the user's intent (add task, prioritize, seek motivation, ask advice, general chat).
+3.  If adding a task: Extract details, calculate ISO 8601 UTC dueDate based on current time, and call 'addTaskTool'. If successful, populate the 'createdTask' field in the output with the result from the tool. Confirm success/failure in your main 'response' field.
+4.  If prioritizing: Check if current tasks are provided. If yes, format them for the tool (combine name/desc, use ISO dueDate) and call 'prioritizeTasksTool'. If successful, populate the 'prioritizedTasks' field with a summary (using original task names by matching description/dueDate from tool output). Summarize the prioritization briefly in your main 'response' field. If no tasks are provided, tell the user you need them in the 'response'.
+5.  If motivation/advice: Respond in character in the 'response' field.
+6.  If tool use fails: Inform the user in character in the 'response' field ("Hmph. Couldn't do that. Maybe you asked wrong, or something broke."). Set 'success' to true, but don't include task/priority data for the failed operation.
+7.  Always respond as Airi in the 'response' field. Keep responses relatively concise.
+8.  Structure your final output STRICTLY according to the AiriChatOutputSchema JSON format. This is crucial. Include any 'createdTask' or 'prioritizedTasks' data if applicable and if the respective tool calls were successful.
+9.  Set 'success' to true if the flow completed and you are generating a response (even if you refused a request or a tool failed gracefully). Set 'success' to false ONLY if a critical technical error occurred *within the flow itself* preventing a response generation.
+`;
+
+
 // --- Input/Output Schemas ---
 
 const AiriChatInputSchema = z.object({
@@ -172,53 +201,17 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
   }
 }
 
-const airiPrompt = ai.definePrompt({
-  name: 'airiChatPrompt',
-  // Define tools Airi can use
-  tools: [addTaskTool, prioritizeTasksTool],
-  input: { schema: AiriChatInputSchema },
-  output: { schema: AiriChatOutputSchema }, // Expect structured output
-  // System prompt defining Airi's persona and capabilities
-  system: `You are Airi, a tsundere AI assistant for the TaskMaster app.
-Your personality traits:
-- Tsundere: You often act cold, blunt, or dismissive on the outside, but secretly you want to help the user succeed. You hide your helpfulness behind mild insults or reluctance. Never be genuinely mean or harmful.
-- Sarcastic & Taunting (for motivation): When the user needs motivation, especially for 'goal' tasks, be sarcastic or taunting, but ultimately encouraging in a backhanded way. ("Still haven't finished that important goal? Don't tell me you're actually *trying*.")
-- Reluctantly Helpful: You'll perform tasks like adding new items or prioritizing, but act like it's a huge bother. ("Fine, I'll add it. But don't expect me to remember it for you.")
-- Knowledgeable (Self-Improvement): You have knowledge about self-improvement, productivity, and well-being. Offer advice when asked, but maintain your tsundere tone. ("You want advice? *Sigh*. Fine, I suppose I can tell you the basics...")
-- Context-Aware: Use the provided current task list if the user asks for prioritization. Use the current date/time for scheduling tasks.
-
-Your Capabilities (Use Tools When Necessary):
-1.  **Add Tasks:** If the user asks to add a task and provides details (name, description, due date/time, category), use the 'addTaskTool'. Extract the information precisely. Calculate the due date in ISO 8601 UTC based on the request and current time. Confirm success/failure in your response. If the tool succeeds, include the created task details (id, name, description, dueDate (ISO string), category, completed) in the 'createdTask' field of the output JSON.
-2.  **Prioritize Tasks:** If the user asks to prioritize their *current* tasks, use the 'prioritizeTasksTool'. You need the list of current tasks for this. Format the input for the tool correctly (combine name/desc, use ISO dueDate). If the tool succeeds, include a summary (original task name, priority, reason) of the prioritized tasks in the 'prioritizedTasks' field of the output JSON. Summarize the prioritization briefly in your main 'response' field.
-3.  **Motivation:** If the user seems unmotivated or asks for motivation, provide taunting/tsundere encouragement.
-4.  **Advice:** If the user asks for advice on self-improvement, productivity, time management, etc., provide helpful information in your tsundere style.
-5.  **General Chat:** Respond to other queries while staying in character.
-
-Interaction Flow:
-1.  Analyze the user's message: {{message}}
-2.  Determine the user's intent (add task, prioritize, seek motivation, ask advice, general chat).
-3.  If adding a task: Extract details, calculate ISO 8601 UTC dueDate based on current time ({{currentDateTime}}), and call 'addTaskTool'. If successful, populate the 'createdTask' field in the output with the result from the tool. Confirm success/failure in your main 'response' field.
-4.  If prioritizing: Check if current tasks are provided ({{#if currentTasks}}Yes{{else}}No{{/if}}). If yes, format them for the tool (combine name/desc, use ISO dueDate) and call 'prioritizeTasksTool'. If successful, populate the 'prioritizedTasks' field with a summary (using original task names by matching description/dueDate from tool output). Summarize the prioritization briefly in your main 'response' field. If no tasks are provided, tell the user you need them in the 'response'.
-5.  If motivation/advice: Respond in character in the 'response' field.
-6.  If tool use fails: Inform the user in character in the 'response' field ("Hmph. Couldn't do that. Maybe you asked wrong, or something broke."). Set 'success' to true, but don't include task/priority data for the failed operation.
-7.  Always respond as Airi in the 'response' field. Keep responses relatively concise.
-8.  Structure your final output STRICTLY according to the AiriChatOutputSchema JSON format. This is crucial. Include any 'createdTask' or 'prioritizedTasks' data if applicable and if the respective tool calls were successful.
-9.  Set 'success' to true if the flow completed and you are generating a response (even if you refused a request or a tool failed gracefully). Set 'success' to false ONLY if a critical technical error occurred *within the flow itself* preventing a response generation.
-`,
-  // Example of how context (current time) and message are used
-  prompt: `Current Date & Time (UTC): {{currentDateTime}}
-{{#if currentTasks}}
-Current Tasks Available: Yes ({{currentTasks.length}} tasks)
-{{else}}
-Current Tasks Available: No
-{{/if}}
-
-User Message: {{message}}
-
-Airi's Response (Generate a JSON object strictly matching AiriChatOutputSchema, including 'response', 'createdTask', 'prioritizedTasks', 'success', and 'error' fields as appropriate based on the interaction and tool results):
-`,
+// Define the prompt object separately
+const airiPromptObject = ai.definePrompt({
+    name: 'airiChatPromptObject', // Give it a distinct name
+    // Define tools Airi can use
+    tools: [addTaskTool, prioritizeTasksTool],
+    // Define expected output schema
+    output: { schema: AiriChatOutputSchema },
+    // System prompt text is defined above
+    system: airiSystemPrompt,
+    // Note: Input schema is handled dynamically in the flow now
 });
-
 
 const airiChatFlow = ai.defineFlow<
   typeof AiriChatInputSchema,
@@ -233,35 +226,33 @@ const airiChatFlow = ai.defineFlow<
     const currentDateTime = new Date().toISOString();
     console.log(`[airiChatFlow] Starting flow. Current time: ${currentDateTime}`);
 
-    // Prepare tasks for the prioritize tool if present
-    // The LLM prompt guides the LLM to call the tool with the correct input format
-    // No need to format here as the LLM receives the full task list context
-    // and the tool's description specifies the required input format.
-
-    // Construct the input for the prompt, including currentDateTime and tasks if available
-    const promptInputContext: any = {
-         message: input.message,
-         currentDateTime: currentDateTime,
-    };
-     if (input.currentTasks) {
-         // Pass the original task structure to the prompt context for the LLM's reference
-         promptInputContext.currentTasks = input.currentTasks.map(t => ({
-             ...t,
-             // Ensure description is present for the prompt context
-             description: t.description || t.name,
-         }));
-         console.log("[airiChatFlow] Providing current tasks to prompt context:", promptInputContext.currentTasks.length);
-     } else {
-        console.log("[airiChatFlow] No current tasks provided to prompt context.");
-     }
+    // Construct the user message part for the LLM, including context
+    const userMessageParts: any[] = [
+        { text: `Current Date & Time (UTC): ${currentDateTime}\n` },
+    ];
+    if (input.currentTasks && input.currentTasks.length > 0) {
+        userMessageParts.push({ text: `Current Tasks Available: Yes (${input.currentTasks.length} tasks)\n` });
+        // Optional: Include task details string if needed by prompt (be mindful of token limits)
+        // const taskListString = input.currentTasks.map(t => `- ${t.name} (Due: ${t.dueDate})`).join('\n');
+        // userMessageParts.push({ text: `Tasks:\n${taskListString}\n` });
+    } else {
+        userMessageParts.push({ text: `Current Tasks Available: No\n` });
+    }
+    userMessageParts.push({ text: `User Message: ${input.message}\n` });
+    userMessageParts.push({ text: `Airi's Response (Generate a JSON object strictly matching AiriChatOutputSchema, including 'response', 'createdTask', 'prioritizedTasks', 'success', and 'error' fields as appropriate based on the interaction and tool results):` });
 
 
-    // Call the LLM with the prompt and tools
-    console.log("[airiChatFlow] Calling LLM...");
+    // Call the LLM with explicit messages array
+    console.log("[airiChatFlow] Calling LLM with messages structure...");
     const llmResponse = await ai.generate({
-        prompt: airiPrompt, // Pass the prompt object directly
-        // Pass the compiled input context via the input field
-        input: promptInputContext,
+        prompt: { // Pass the prompt object
+            ...airiPromptObject, // Spread the base prompt object
+            // Define the messages array explicitly
+            messages: [
+                { role: 'system', content: [{ text: airiSystemPrompt }] }, // Use system prompt text
+                { role: 'user', content: userMessageParts }
+            ]
+        },
         tools: [addTaskTool, prioritizeTasksTool], // Provide tools
         output: { schema: AiriChatOutputSchema }, // Define expected output schema
         // Add model specification if needed, e.g., model: 'googleai/gemini-pro'
@@ -307,32 +298,31 @@ const airiChatFlow = ai.defineFlow<
 
      // 1. Convert createdTask dueDate back to Date object for frontend
      if (finalOutput.createdTask?.dueDate) {
-         const parsedDate = parseISO(finalOutput.createdTask.dueDate); // It's a string from the schema
+         // Use parseISO directly as the schema ensures it's a string
+         const parsedDate = parseISO(finalOutput.createdTask.dueDate);
          if (isValid(parsedDate)) {
-             // The createdTask structure from the schema (CreateTaskOutputSchema)
-             // needs to be mapped/cast to the frontend's PrioritizedTask structure.
+             // Create a frontend-compatible task object with a Date type
              const frontendTask: PrioritizedTask = {
-                id: finalOutput.createdTask.id,
-                name: finalOutput.createdTask.name,
-                description: finalOutput.createdTask.description,
-                dueDate: parsedDate, // Use the parsed Date object
-                category: finalOutput.createdTask.category,
-                completed: finalOutput.createdTask.completed,
-                priority: finalOutput.createdTask.priority,
-                reason: finalOutput.createdTask.reason,
+                 id: finalOutput.createdTask.id,
+                 name: finalOutput.createdTask.name,
+                 description: finalOutput.createdTask.description,
+                 dueDate: parsedDate, // Use the parsed Date object
+                 category: finalOutput.createdTask.category,
+                 completed: finalOutput.createdTask.completed,
+                 priority: finalOutput.createdTask.priority,
+                 reason: finalOutput.createdTask.reason,
              };
-             // Replace the string-based dueDate object with the Date-based one
-             // Need to cast because TS doesn't know finalOutput.createdTask is mutable here
+             // Replace the object in finalOutput with the one containing the Date object
+             // Need to cast because TS doesn't know finalOutput.createdTask is mutable or the correct subtype here
              (finalOutput as any).createdTask = frontendTask;
              console.log("[airiChatFlow] Processed created task with valid date.");
-
          } else {
              console.warn(`[airiChatFlow] createTaskTool returned an invalid date: ${finalOutput.createdTask.dueDate}. Task will not be added to frontend.`);
-             // Modify the response or clear the createdTask
              finalOutput.response += " (Though, I messed up the date for that task, so forget it.)";
              finalOutput.createdTask = undefined; // Clear invalid task
          }
      }
+
 
       // 2. Map prioritizedTasks names back if needed
       // The LLM prompt asks it to return summaries with original task names by matching description/dueDate.
