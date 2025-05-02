@@ -335,45 +335,82 @@ export function TaskManager() {
           const now = new Date();
           // Find tasks due within the next hour or overdue
           const urgentTasks = incompleteTasks.filter(task => task.dueDate && (isPast(task.dueDate) || (task.dueDate.getTime() - now.getTime()) < 60 * 60 * 1000));
-          if (urgentTasks.length > 0) {
-              const taskToSend = urgentTasks[Math.floor(Math.random() * urgentTasks.length)];
 
-              const messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
-              const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
-              const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-              const notificationMessage = `Reminder: "${taskToSend.name}" ${isPast(taskToSend.dueDate) ? 'was due' : 'is due'} ${format(taskToSend.dueDate, 'Pp')}. ${randomMessage}`;
+          const urgentGoals = urgentTasks.filter(t => t.category === 'goal');
+          const urgentChores = urgentTasks.filter(t => t.category === 'chore');
+
+          let taskToSend: PrioritizedTask | undefined;
+          let isGoal = false;
+          let messageType: 'motivational' | 'taunting' | 'simple' = 'simple';
+          let randomMessage = '';
+
+          // Prioritize urgent goals for motivational/taunting messages
+          if (urgentGoals.length > 0) {
+            taskToSend = urgentGoals[Math.floor(Math.random() * urgentGoals.length)];
+            isGoal = true;
+            messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
+            const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
+            randomMessage = messages[Math.floor(Math.random() * messages.length)];
+          } else if (urgentChores.length > 0) {
+            // If no urgent goals, send simple reminder for urgent chores
+            taskToSend = urgentChores[Math.floor(Math.random() * urgentChores.length)];
+            messageType = 'simple';
+            randomMessage = "Don't forget about this!";
+          } else if (incompleteTasks.length > 0) {
+             // If no urgent tasks, send a general reminder (prioritizing goals slightly)
+             const incompleteGoals = incompleteTasks.filter(t => t.category === 'goal');
+             if (incompleteGoals.length > 0 && Math.random() < 0.6) { // 60% chance to pick a goal
+                taskToSend = incompleteGoals[Math.floor(Math.random() * incompleteGoals.length)];
+                isGoal = true;
+                messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
+                const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
+                randomMessage = messages[Math.floor(Math.random() * messages.length)];
+             } else {
+                 // Pick any remaining incomplete task (likely a chore or non-urgent goal)
+                 const remainingIncomplete = incompleteTasks.filter(t => !isGoal || t.category === 'chore'); // Exclude the goal if already picked
+                 if (remainingIncomplete.length > 0) {
+                    taskToSend = remainingIncomplete[Math.floor(Math.random() * remainingIncomplete.length)];
+                    messageType = 'simple'; // Simple reminder for non-urgent chores/goals
+                    randomMessage = "Just a heads-up about this task.";
+                 }
+             }
+          }
+
+          if (taskToSend && taskToSend.dueDate && isValid(taskToSend.dueDate)) {
+              const dueStatus = isPast(taskToSend.dueDate) ? 'was due' : 'is due';
+              const formattedTime = format(taskToSend.dueDate, 'Pp');
+              let notificationMessage = `Reminder: "${taskToSend.name}" ${dueStatus} ${formattedTime}. ${randomMessage}`;
+              let toastTitle = `🔔 Task Reminder (${taskToSend.category}) 🔔`;
+              let toastVariant: "default" | "destructive" = "default";
+
+              if (isGoal && messageType !== 'simple') { // Only goals get motivational/taunting
+                toastTitle = `🚨 Goal Reminder (${messageType}) 🚨`;
+                notificationMessage = `Reminder: Goal "${taskToSend.name}" ${dueStatus} ${formattedTime}. ${randomMessage}`;
+                if (isPast(taskToSend.dueDate)) {
+                  toastVariant = "destructive";
+                }
+              } else { // Chores or non-urgent goals get simple reminders
+                 notificationMessage = `Reminder: ${taskToSend.category.charAt(0).toUpperCase() + taskToSend.category.slice(1)} "${taskToSend.name}" ${dueStatus} ${formattedTime}. ${randomMessage}`;
+                 if (isPast(taskToSend.dueDate)) {
+                    toastVariant = "destructive"; // Still destructive if overdue chore
+                 }
+              }
 
               sendPersistentNotification(notificationMessage);
 
               toast({
-                title: `🚨 Task Reminder (${messageType}) 🚨`,
+                title: toastTitle,
                 description: notificationMessage,
-                variant: isPast(taskToSend.dueDate) ? "destructive" : "default",
+                variant: toastVariant,
                 duration: 10000,
               });
-          } else if (incompleteTasks.length > 0) {
-             // Send a general reminder if no urgent tasks
-             const taskToSend = incompleteTasks[Math.floor(Math.random() * incompleteTasks.length)];
-             const messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
-             const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
-             const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-             const notificationMessage = `Gentle Reminder: Don't forget about "${taskToSend.name}" due ${format(taskToSend.dueDate, 'Pp')}. ${randomMessage}`;
-
-             sendPersistentNotification(notificationMessage);
-             toast({
-                title: `🔔 Task Reminder (${messageType}) 🔔`,
-                description: notificationMessage,
-                variant: "default",
-                duration: 10000,
-             });
           }
-
         }
       }, 30000); // Check every 30 seconds
 
       toast({
         title: "⚡ Force Mode Activated! ⚡",
-        description: "Get ready for persistent, slightly annoying reminders.",
+        description: "Get ready for persistent reminders (extra annoying for goals!).",
         variant: "default"
       });
 
