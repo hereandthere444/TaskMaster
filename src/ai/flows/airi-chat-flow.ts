@@ -215,7 +215,7 @@ const airiChatFlow = ai.defineFlow<
     console.log(`[airiChatFlow] Starting flow. Current time: ${currentDateTime}`);
 
     // Construct the user message part for the LLM, including context
-    // Ensure only { text: string } objects are included
+    // Ensure only { text: string } objects are included in the user message content array
     const userMessageParts: { text: string }[] = [];
 
     userMessageParts.push({ text: `Current Date & Time (UTC): ${currentDateTime}\n` });
@@ -235,9 +235,9 @@ const airiChatFlow = ai.defineFlow<
     console.log("[airiChatFlow] Calling LLM with messages structure...");
     const llmResponse = await ai.generate({
       prompt: [
-          // System prompt content should be a string, not an array of objects
+          // System prompt content MUST be a simple string
           { role: 'system', content: airiSystemPrompt },
-          { role: 'user', content: userMessageParts }             // User message parts
+          { role: 'user', content: userMessageParts } // User message parts array
       ],
       tools: [addTaskTool, prioritizeTasksTool],       // Available tools
       output: { schema: AiriChatOutputSchema },       // Expected output schema
@@ -284,26 +284,30 @@ const airiChatFlow = ai.defineFlow<
 
      // 1. Convert createdTask dueDate back to Date object for frontend
      if (finalOutput.createdTask?.dueDate) {
+         // Ensure the createdTask is treated as the specific output type from createTask
+         const createdTaskData = finalOutput.createdTask as CreateTaskOutput; // Cast to the correct type
+
          // Use parseISO directly as the schema ensures it's a string
-         const parsedDate = parseISO(finalOutput.createdTask.dueDate);
+         const parsedDate = parseISO(createdTaskData.dueDate);
          if (isValid(parsedDate)) {
              // Create a frontend-compatible task object with a Date type
              const frontendTask: PrioritizedTask = {
-                 id: finalOutput.createdTask.id,
-                 name: finalOutput.createdTask.name,
-                 description: finalOutput.createdTask.description,
+                 id: createdTaskData.id,
+                 name: createdTaskData.name,
+                 description: createdTaskData.description,
                  dueDate: parsedDate, // Use the parsed Date object
-                 category: finalOutput.createdTask.category,
-                 completed: finalOutput.createdTask.completed,
-                 priority: finalOutput.createdTask.priority,
-                 reason: finalOutput.createdTask.reason,
+                 category: createdTaskData.category,
+                 completed: createdTaskData.completed,
+                 // Include priority and reason if they exist in the output (though less likely for new task)
+                 priority: createdTaskData.priority,
+                 reason: createdTaskData.reason,
              };
              // Replace the object in finalOutput with the one containing the Date object
              // Need to cast because TS doesn't know finalOutput.createdTask is mutable or the correct subtype here
              (finalOutput as any).createdTask = frontendTask;
              console.log("[airiChatFlow] Processed created task with valid date.");
          } else {
-             console.warn(`[airiChatFlow] createTaskTool returned an invalid date: ${finalOutput.createdTask.dueDate}. Task will not be added to frontend.`);
+             console.warn(`[airiChatFlow] createTaskTool returned an invalid date: ${createdTaskData.dueDate}. Task will not be added to frontend.`);
              finalOutput.response += " (Though, I messed up the date for that task, so forget it.)";
              finalOutput.createdTask = undefined; // Clear invalid task
          }
@@ -332,5 +336,3 @@ const airiChatFlow = ai.defineFlow<
      return { ...finalOutput, success: true };
   }
 );
-
-    
