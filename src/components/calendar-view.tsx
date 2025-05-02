@@ -1,3 +1,7 @@
+/**
+ * @fileoverview Calendar view component to display tasks on a calendar grid.
+ * Highlights days based on the ratio of pending goals to chores.
+ */
 'use client';
 
 import * as React from 'react';
@@ -17,11 +21,12 @@ import {
   isValid,
   startOfDay,
   getDay,
+  parse, // Added parse for safety if needed, but parseISO should handle it
 } from 'date-fns';
 import { Skeleton } from './ui/skeleton';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Button } from './ui/button';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react'; // Import CalendarDays
 
 // Define the Task structure matching TaskManager's state
 interface CalendarTask {
@@ -59,16 +64,23 @@ export function CalendarView() {
         const parsedTasks: CalendarTask[] = JSON.parse(savedTasks).map(
           (task: any) => {
             let parsedDate = task.dueDate ? parseISO(task.dueDate) : null;
+            // Check validity rigorously
             if (!parsedDate || !isValid(parsedDate)) {
-              console.warn(
-                `Invalid or missing dueDate for task "${task.name}" in Calendar. Defaulting to now.`
-              );
-              parsedDate = new Date(); // Default if invalid
+              // Try parsing with a common format if ISO fails, as a fallback
+              // Example: parsedDate = parse(task.dueDate, 'yyyy-MM-dd HH:mm:ss', new Date());
+              if (!parsedDate || !isValid(parsedDate)) {
+                 console.warn(
+                  `Invalid or missing dueDate "${task.dueDate}" for task "${task.name || task.description}" in Calendar. Defaulting to now.`
+                 );
+                 parsedDate = new Date(); // Default if invalid
+              }
             }
             return {
               ...task,
               name: task.name || task.description || 'Unnamed Task',
               dueDate: parsedDate, // Store as Date object
+              category: task.category || 'goal', // Default category if missing
+              completed: task.completed || false, // Default completion if missing
             };
           }
         );
@@ -100,20 +112,29 @@ export function CalendarView() {
 
   const tasksForSelectedDate = React.useMemo(() => {
     if (!selectedDate) return [];
-    return tasks.filter((task) => isSameDay(task.dueDate, selectedDate));
+    // Filter tasks ensuring dueDate is a valid Date object before comparison
+    return tasks.filter((task) => task.dueDate && isValid(task.dueDate) && isSameDay(task.dueDate, selectedDate));
   }, [selectedDate, tasks]);
 
   // Calculate task ratios for each day in the current month
   const dailyTaskRatios = React.useMemo(() => {
     const ratios = new Map<string, DailyTaskRatio>();
-    const daysInMonth = eachDayOfInterval({
+    const monthInterval = {
       start: startOfMonth(currentMonth),
       end: endOfMonth(currentMonth),
-    });
+    };
+
+    // Ensure interval is valid before proceeding
+    if (!isValid(monthInterval.start) || !isValid(monthInterval.end) || monthInterval.start > monthInterval.end) {
+        console.error("Invalid month interval for ratio calculation:", monthInterval);
+        return ratios; // Return empty map if interval is invalid
+    }
+
+    const daysInMonth = eachDayOfInterval(monthInterval);
 
     daysInMonth.forEach((day) => {
       const dayKey = format(day, 'yyyy-MM-dd');
-      const tasksOnDay = tasks.filter((task) => isSameDay(task.dueDate, day));
+      const tasksOnDay = tasks.filter((task) => task.dueDate && isValid(task.dueDate) && isSameDay(task.dueDate, day));
       const goalCount = tasksOnDay.filter(
         (t) => t.category === 'goal' && !t.completed
       ).length;
@@ -131,6 +152,8 @@ export function CalendarView() {
 
   // Unique Feature: Custom day rendering with highlighting based on task ratio
   const renderDayWithHighlight = (day: Date): React.ReactNode => {
+    if (!isValid(day)) return <div className="text-destructive">Invalid Date</div>; // Handle invalid date rendering
+
     const dayKey = format(day, 'yyyy-MM-dd');
     const ratio = dailyTaskRatios.get(dayKey);
     const dayNumber = format(day, 'd');
@@ -153,7 +176,7 @@ export function CalendarView() {
       }
     }
 
-    const isSelected = selectedDate && isSameDay(day, selectedDate);
+    const isSelected = selectedDate && isValid(selectedDate) && isSameDay(day, selectedDate);
     const isToday = isSameDay(day, new Date());
 
     return (
@@ -167,6 +190,11 @@ export function CalendarView() {
               isToday && !isSelected && 'border-2 border-foreground',
               !highlightClass && 'hover:bg-accent/50' // Hover effect for days without tasks
             )}
+            role="button" // Make it seem interactive
+            aria-label={`Date ${format(day, 'PPP')}${tooltipContent ? `, ${tooltipContent}` : ''}`}
+            tabIndex={0} // Make it focusable
+            onClick={() => handleDateSelect(day)} // Allow clicking div to select
+             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDateSelect(day); }} // Keyboard selection
           >
             {dayNumber}
             {ratio && ratio.total > 0 && (
@@ -190,19 +218,39 @@ export function CalendarView() {
 
   // Custom components for react-day-picker
   const CustomDay = ({ date, displayMonth }: { date: Date; displayMonth: Date }) => {
-    if (!isSameDay(startOfMonth(date), startOfMonth(displayMonth))) {
-      // Render days outside the current month differently (optional)
-      return <div className="text-muted-foreground/50 flex h-full w-full items-center justify-center">{format(date, 'd')}</div>;
+    // Validate dates before comparison
+    if (!isValid(date) || !isValid(displayMonth)) {
+        return <div className="text-destructive">Invalid Date</div>;
     }
+
+    // Check if the date belongs to the currently displayed month
+    if (date.getMonth() !== displayMonth.getMonth() || date.getFullYear() !== displayMonth.getFullYear()) {
+      // Render days outside the current month differently
+      return <div className="text-muted-foreground/50 flex h-full w-full items-center justify-center opacity-50">{format(date, 'd')}</div>;
+    }
+    // Render days within the current month using the highlight logic
     return renderDayWithHighlight(date);
   };
 
+
   const CustomCaption = (props: { displayMonth: Date }) => {
+    if (!isValid(props.displayMonth)) return null; // Don't render caption for invalid month
+
     const handlePreviousMonth = () => {
-      setCurrentMonth((prev) => startOfMonth(new Date(prev.setMonth(prev.getMonth() - 1))));
+       setCurrentMonth((prev) => {
+           if (!isValid(prev)) return startOfMonth(new Date()); // Fallback if prev is invalid
+           const newMonth = new Date(prev);
+           newMonth.setMonth(newMonth.getMonth() - 1);
+           return startOfMonth(newMonth);
+       });
     };
     const handleNextMonth = () => {
-      setCurrentMonth((prev) => startOfMonth(new Date(prev.setMonth(prev.getMonth() + 1))));
+       setCurrentMonth((prev) => {
+           if (!isValid(prev)) return startOfMonth(new Date()); // Fallback if prev is invalid
+           const newMonth = new Date(prev);
+           newMonth.setMonth(newMonth.getMonth() + 1);
+           return startOfMonth(newMonth);
+        });
     };
 
     return (
@@ -247,33 +295,39 @@ export function CalendarView() {
                 <Calendar
                   mode="single"
                   selected={selectedDate}
-                  onSelect={handleDateSelect}
-                  month={currentMonth}
+                  // onSelect={handleDateSelect} // Selection is handled by CustomDay onClick now
+                  month={isValid(currentMonth) ? currentMonth : startOfMonth(new Date())} // Ensure valid month
                   onMonthChange={handleMonthChange}
-                  className="w-full p-0 [&_button]:rounded-md"
+                  className="w-full p-0 [&_button]:rounded-md" // Removed the button style override here
                   classNames={{
                     table: "w-full border-collapse",
                     head_row: "flex border-b",
                     head_cell: "w-full text-muted-foreground font-medium text-sm capitalize py-2 px-1 text-center",
-                    row: "flex w-full mt-0 border-b last:border-b-0", // Remove mt-2 and ensure border
+                    row: "flex w-full mt-0 border-b last:border-b-0",
                     cell: cn(
-                      "relative p-0 h-20 w-full text-center text-sm focus-within:relative focus-within:z-20 flex items-center justify-center", // Adjust height, center content
-                      // "[&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md", // Existing styles, might need adjustment
-                      "border-r last:border-r-0" // Add vertical borders between cells
+                      "relative p-0 h-20 w-full text-center text-sm focus-within:relative focus-within:z-20 flex items-center justify-center", // Keep height and centering
+                      "border-r last:border-r-0" // Vertical borders
                     ),
-                    day: "h-full w-full p-0 font-normal flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1", // Full size day button
-                    day_selected: "", // Removed default selection style, handled by customDay
-                    day_today: "", // Removed default today style, handled by customDay
-                    day_outside: "text-muted-foreground opacity-50", // Style for days outside month
-                    day_disabled: "text-muted-foreground opacity-50 cursor-not-allowed",
+                    day: "h-full w-full p-0 font-normal flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1", // Removed button variant style
+                    day_selected: "", // We handle selection style in CustomDay
+                    day_today: "", // We handle today style in CustomDay
+                    day_outside: "", // Handling outside days in CustomDay component now
+                    day_disabled: "text-muted-foreground opacity-50 cursor-not-allowed", // Keep disabled style
                     // day_range_middle: "aria-selected:bg-accent aria-selected:text-accent-foreground",
-                    // day_hidden: "invisible", // Hide days completely outside the month if needed
-                    caption: "hidden", // Hide default caption, using CustomCaption
+                    // day_hidden: "invisible",
+                    caption: "hidden", // Hide default caption
                   }}
                   components={{
-                     Day: CustomDay, // Use custom Day component for highlighting
+                     Day: CustomDay, // Use custom Day component
                      Caption: CustomCaption, // Use custom Caption component
                   }}
+                  modifiersClassNames={{
+                      // You might not need these if CustomDay handles all styling
+                      // selected: 'bg-primary/30 ring-2 ring-ring ring-offset-2',
+                      // today: 'border-2 border-foreground',
+                  }}
+                  // Ensure selected date is valid before passing
+                  // selected={selectedDate && isValid(selectedDate) ? selectedDate : undefined}
                 />
               )}
             </CardContent>
@@ -285,7 +339,7 @@ export function CalendarView() {
           <Card className="shadow-md">
             <CardHeader>
               <CardTitle className="text-xl">
-                {selectedDate ? format(selectedDate, 'PPP') : 'Select a date'}
+                {selectedDate && isValid(selectedDate) ? format(selectedDate, 'PPP') : 'Select a date'}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -329,7 +383,8 @@ export function CalendarView() {
                             )}
                             title={task.description}
                           >
-                             {format(task.dueDate, 'p')} {/* Show time */} - {task.description}
+                             {/* Ensure dueDate is valid before formatting */}
+                             {task.dueDate && isValid(task.dueDate) ? format(task.dueDate, 'p') : 'Invalid Time'} - {task.description}
                           </span>
                         </div>
                         <Badge
