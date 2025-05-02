@@ -201,18 +201,6 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
   }
 }
 
-// Define the prompt object separately
-const airiPromptObject = ai.definePrompt({
-    name: 'airiChatPromptObject', // Give it a distinct name
-    // Define tools Airi can use
-    tools: [addTaskTool, prioritizeTasksTool],
-    // Define expected output schema
-    output: { schema: AiriChatOutputSchema },
-    // System prompt text is defined above
-    system: airiSystemPrompt,
-    // Note: Input schema is handled dynamically in the flow now
-});
-
 const airiChatFlow = ai.defineFlow<
   typeof AiriChatInputSchema,
   typeof AiriChatOutputSchema
@@ -227,9 +215,11 @@ const airiChatFlow = ai.defineFlow<
     console.log(`[airiChatFlow] Starting flow. Current time: ${currentDateTime}`);
 
     // Construct the user message part for the LLM, including context
-    const userMessageParts: any[] = [
-        { text: `Current Date & Time (UTC): ${currentDateTime}\n` },
-    ];
+    // Ensure only { text: string } objects are included
+    const userMessageParts: { text: string }[] = [];
+
+    userMessageParts.push({ text: `Current Date & Time (UTC): ${currentDateTime}\n` });
+
     if (input.currentTasks && input.currentTasks.length > 0) {
         userMessageParts.push({ text: `Current Tasks Available: Yes (${input.currentTasks.length} tasks)\n` });
         // Optional: Include task details string if needed by prompt (be mindful of token limits)
@@ -241,26 +231,21 @@ const airiChatFlow = ai.defineFlow<
     userMessageParts.push({ text: `User Message: ${input.message}\n` });
     userMessageParts.push({ text: `Airi's Response (Generate a JSON object strictly matching AiriChatOutputSchema, including 'response', 'createdTask', 'prioritizedTasks', 'success', and 'error' fields as appropriate based on the interaction and tool results):` });
 
-
-    // Call the LLM with explicit messages array
+    // Call the LLM with explicit messages array using Genkit 1.x syntax
     console.log("[airiChatFlow] Calling LLM with messages structure...");
     const llmResponse = await ai.generate({
-        prompt: { // Pass the prompt object
-            ...airiPromptObject, // Spread the base prompt object
-            // Define the messages array explicitly
-            messages: [
-                { role: 'system', content: [{ text: airiSystemPrompt }] }, // Use system prompt text
-                { role: 'user', content: userMessageParts }
-            ]
-        },
-        tools: [addTaskTool, prioritizeTasksTool], // Provide tools
-        output: { schema: AiriChatOutputSchema }, // Define expected output schema
-        // Add model specification if needed, e.g., model: 'googleai/gemini-pro'
+      prompt: [
+          { role: 'system', content: [{ text: airiSystemPrompt }] }, // System prompt
+          { role: 'user', content: userMessageParts }             // User message parts
+      ],
+      tools: [addTaskTool, prioritizeTasksTool],       // Available tools
+      output: { schema: AiriChatOutputSchema },       // Expected output schema
+      // model: 'googleai/gemini-pro', // Specify model if not using default
     });
     console.log("[airiChatFlow] LLM call finished.");
 
 
-    // Get the structured output
+    // Get the structured output using Genkit 1.x syntax
     const output = llmResponse.output;
     console.log("[airiChatFlow] Raw LLM Output:", JSON.stringify(output, null, 2)); // Log raw output
 
@@ -346,3 +331,5 @@ const airiChatFlow = ai.defineFlow<
      return { ...finalOutput, success: true };
   }
 );
+
+    
