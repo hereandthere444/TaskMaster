@@ -83,8 +83,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
            </div>
         </SidebarFooter>
       </Sidebar>
-
-      <SidebarInset>{children}</SidebarInset>
+      {/* Added flex flex-col h-screen to allow children to fill space */}
+      <SidebarInset className="flex flex-col h-screen">
+        {children}
+      </SidebarInset>
     </SidebarProvider>
   );
 }

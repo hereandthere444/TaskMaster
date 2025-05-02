@@ -94,7 +94,7 @@ const tauntingMessages = [
     "Even snails make progress eventually. What's your excuse?"
 ];
 
-// Helper component for combined date and time selection
+// Helper component for combined date and time selection with AM/PM
 function DateTimePicker({
   value,
   onChange,
@@ -105,49 +105,79 @@ function DateTimePicker({
   disabled?: (date: Date) => boolean;
 }) {
   const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(value ? startOfDay(value) : undefined);
-  const [hour, setHour] = React.useState<string>(value ? format(value, 'HH') : '09'); // Default to 09
-  const [minute, setMinute] = React.useState<string>(value ? format(value, 'mm') : '00'); // Default to 00
+  // Use 'hh' for 12-hour format, default to '09' (9 AM)
+  const [hour12, setHour12] = React.useState<string>(value ? format(value, 'hh') : '09');
+  const [minute, setMinute] = React.useState<string>(value ? format(value, 'mm') : '00');
+  // Use 'a' for AM/PM, default to 'AM'
+  const [period, setPeriod] = React.useState<'AM' | 'PM'>(value ? (format(value, 'a') as 'AM' | 'PM') : 'AM');
 
   // Update internal state if the external value changes
   React.useEffect(() => {
-    if (value) {
+    if (value && isValid(value)) {
       setSelectedDate(startOfDay(value));
-      setHour(format(value, 'HH'));
+      setHour12(format(value, 'hh'));
       setMinute(format(value, 'mm'));
+      setPeriod(format(value, 'a') as 'AM' | 'PM');
     } else {
-      // Default to today 9:00 AM if no value
+      // Default to today 9:00 AM if no value or invalid value
       const defaultDate = setMinutes(setHours(new Date(), 9), 0);
       setSelectedDate(startOfDay(defaultDate));
-      setHour('09');
+      setHour12('09');
       setMinute('00');
-      // Optionally call onChange to set a default value initially
-      // onChange(defaultDate);
+      setPeriod('AM');
+      // Optionally call onChange to set a default value initially if `value` was undefined
+      // if (!value) onChange(defaultDate);
     }
-  }, [value]);
+  }, [value]); // Removed onChange from dependencies to avoid potential loops
+
+  const updateDateTime = (newDate: Date | undefined, newHour12: string, newMinute: string, newPeriod: 'AM' | 'PM') => {
+      if (!newDate) {
+          onChange(undefined);
+          return;
+      }
+
+      let hour24 = parseInt(newHour12, 10);
+      if (newPeriod === 'PM' && hour24 !== 12) {
+          hour24 += 12;
+      } else if (newPeriod === 'AM' && hour24 === 12) { // Handle 12 AM (midnight)
+          hour24 = 0;
+      }
+
+      const minuteVal = parseInt(newMinute, 10);
+
+      if (!isNaN(hour24) && !isNaN(minuteVal)) {
+          const newDateTime = setMinutes(setHours(newDate, hour24), minuteVal);
+          if (isValid(newDateTime)) {
+            onChange(newDateTime);
+          } else {
+              console.error("Generated invalid date in DateTimePicker:", { newDate, hour24, minuteVal });
+          }
+      }
+  };
 
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDate(date);
-    if (date) {
-      const newDateTime = setMinutes(setHours(date, parseInt(hour, 10)), parseInt(minute, 10));
-      onChange(newDateTime);
-    } else {
-      onChange(undefined);
-    }
+    updateDateTime(date, hour12, minute, period);
   };
 
-  const handleTimeChange = (type: 'hour' | 'minute', val: string) => {
-    if (type === 'hour') setHour(val);
-    if (type === 'minute') setMinute(val);
+  const handleTimeChange = (type: 'hour' | 'minute' | 'period', val: string) => {
+    let newHour12 = hour12;
+    let newMinute = minute;
+    let newPeriod = period;
 
-    if (selectedDate) {
-      const newHour = type === 'hour' ? parseInt(val, 10) : parseInt(hour, 10);
-      const newMinute = type === 'minute' ? parseInt(val, 10) : parseInt(minute, 10);
-      const newDateTime = setMinutes(setHours(selectedDate, newHour), newMinute);
-      onChange(newDateTime);
-    }
+    if (type === 'hour') newHour12 = val;
+    if (type === 'minute') newMinute = val;
+    if (type === 'period') newPeriod = val as 'AM' | 'PM';
+
+    setHour12(newHour12);
+    setMinute(newMinute);
+    setPeriod(newPeriod);
+
+    updateDateTime(selectedDate, newHour12, newMinute, newPeriod);
   };
 
-  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+  // 12-hour format hours (01-12)
+  const hours12 = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
   const minutes = Array.from({ length: 60 / 5 }, (_, i) => String(i * 5).padStart(2, '0')); // 5-minute increments
 
   return (
@@ -161,7 +191,7 @@ function DateTimePicker({
           )}
         >
           <CalendarIcon className="mr-2 h-4 w-4" />
-          {value ? format(value, "PPP p") : <span>Pick a date and time</span>}
+          {value && isValid(value) ? format(value, "PPP p") : <span>Pick a date and time</span>}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0">
@@ -177,17 +207,19 @@ function DateTimePicker({
         />
         <div className="p-4 border-t border-border flex items-center justify-center space-x-2">
           <Clock className="h-4 w-4 text-muted-foreground" />
-          <Select value={hour} onValueChange={(val) => handleTimeChange('hour', val)}>
+          {/* Hour Select (12-hour) */}
+          <Select value={hour12} onValueChange={(val) => handleTimeChange('hour', val)}>
             <SelectTrigger className="w-[60px]">
               <SelectValue placeholder="HH" />
             </SelectTrigger>
             <SelectContent>
-              {hours.map((h) => (
+              {hours12.map((h) => (
                 <SelectItem key={h} value={h}>{h}</SelectItem>
               ))}
             </SelectContent>
           </Select>
           <span>:</span>
+          {/* Minute Select */}
           <Select value={minute} onValueChange={(val) => handleTimeChange('minute', val)}>
             <SelectTrigger className="w-[60px]">
               <SelectValue placeholder="MM" />
@@ -197,6 +229,16 @@ function DateTimePicker({
                 <SelectItem key={m} value={m}>{m}</SelectItem>
               ))}
             </SelectContent>
+          </Select>
+          {/* AM/PM Select */}
+          <Select value={period} onValueChange={(val) => handleTimeChange('period', val)}>
+              <SelectTrigger className="w-[65px]">
+                  <SelectValue placeholder="AM/PM"/>
+              </SelectTrigger>
+              <SelectContent>
+                  <SelectItem value="AM">AM</SelectItem>
+                  <SelectItem value="PM">PM</SelectItem>
+              </SelectContent>
           </Select>
         </div>
       </PopoverContent>
@@ -292,22 +334,40 @@ export function TaskManager() {
         if (incompleteTasks.length > 0) {
           const now = new Date();
           // Find tasks due within the next hour or overdue
-          const urgentTasks = incompleteTasks.filter(task => isPast(task.dueDate) || (task.dueDate.getTime() - now.getTime()) < 60 * 60 * 1000);
-          const taskToSend = urgentTasks.length > 0 ? urgentTasks[Math.floor(Math.random() * urgentTasks.length)] : incompleteTasks[Math.floor(Math.random() * incompleteTasks.length)];
+          const urgentTasks = incompleteTasks.filter(task => task.dueDate && (isPast(task.dueDate) || (task.dueDate.getTime() - now.getTime()) < 60 * 60 * 1000));
+          if (urgentTasks.length > 0) {
+              const taskToSend = urgentTasks[Math.floor(Math.random() * urgentTasks.length)];
 
-          const messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
-          const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
-          const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-          const notificationMessage = `Reminder: "${taskToSend.name}" ${isPast(taskToSend.dueDate) ? 'was due' : 'is due'} ${format(taskToSend.dueDate, 'Pp')}. ${randomMessage}`;
+              const messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
+              const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
+              const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+              const notificationMessage = `Reminder: "${taskToSend.name}" ${isPast(taskToSend.dueDate) ? 'was due' : 'is due'} ${format(taskToSend.dueDate, 'Pp')}. ${randomMessage}`;
 
-          sendPersistentNotification(notificationMessage);
+              sendPersistentNotification(notificationMessage);
 
-          toast({
-            title: `🚨 Task Reminder (${messageType}) 🚨`,
-            description: notificationMessage,
-            variant: isPast(taskToSend.dueDate) ? "destructive" : "default",
-            duration: 10000,
-          });
+              toast({
+                title: `🚨 Task Reminder (${messageType}) 🚨`,
+                description: notificationMessage,
+                variant: isPast(taskToSend.dueDate) ? "destructive" : "default",
+                duration: 10000,
+              });
+          } else if (incompleteTasks.length > 0) {
+             // Send a general reminder if no urgent tasks
+             const taskToSend = incompleteTasks[Math.floor(Math.random() * incompleteTasks.length)];
+             const messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
+             const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
+             const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+             const notificationMessage = `Gentle Reminder: Don't forget about "${taskToSend.name}" due ${format(taskToSend.dueDate, 'Pp')}. ${randomMessage}`;
+
+             sendPersistentNotification(notificationMessage);
+             toast({
+                title: `🔔 Task Reminder (${messageType}) 🔔`,
+                description: notificationMessage,
+                variant: "default",
+                duration: 10000,
+             });
+          }
+
         }
       }, 30000); // Check every 30 seconds
 
@@ -322,13 +382,18 @@ export function TaskManager() {
         clearInterval(notificationIntervalRef.current);
         notificationIntervalRef.current = null;
       }
-      toast({
-        title: "😌 Force Mode Deactivated.",
-        description: "You're on your own now. Good luck.",
-        variant: "default"
-      });
+      // Don't show deactivation toast if it wasn't active initially
+      // (prevents toast on initial load if forceMode starts as false)
+      if (notificationIntervalRef.current !== null || forceMode) { // Check if it *was* running or is *currently* true
+          toast({
+            title: "😌 Force Mode Deactivated.",
+            description: "You're on your own now. Good luck.",
+            variant: "default"
+          });
+      }
     }
 
+    // Cleanup interval on component unmount
     return () => {
       if (notificationIntervalRef.current) {
         clearInterval(notificationIntervalRef.current);
@@ -361,6 +426,8 @@ export function TaskManager() {
             description = "Network error during speech recognition. Check your internet connection.";
         } else if (event.error === 'no-speech') {
             description = "No speech detected. Please speak clearly.";
+        } else if (event.error === 'audio-capture') {
+             description = "Audio capture failed. Check microphone connection/settings.";
         }
         toast({
           title: 'Voice Recognition Error',
@@ -373,24 +440,45 @@ export function TaskManager() {
 
       recognitionRef.current.onend = () => {
         // Ensure recording stops if recognition ends unexpectedly
-         setIsRecording(false);
+         if (isRecording) { // Only update state if it was supposed to be recording
+             setIsRecording(false);
+             // Maybe add a toast if it ended unexpectedly without a result or error?
+             // console.log("Speech recognition ended.");
+         }
       };
     } else {
       console.warn('Speech Recognition not supported in this browser.');
+      // Maybe disable the mic button if not supported
     }
 
+    // Cleanup: Stop recognition if component unmounts while recording
     return () => {
         if (recognitionRef.current && isRecording) {
+             console.log("Stopping speech recognition on unmount.");
             recognitionRef.current.stop();
         }
     };
+  // isRecording is removed to prevent re-initialization loops on state change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Removed isRecording dependency to prevent re-initialization loops
+  }, [toast]); // Keep toast dependency
 
   const startRecording = () => {
-    if (recognitionRef.current && !isRecording) {
+    if (!recognitionRef.current) {
+         toast({
+            title: 'Voice Input Not Supported',
+            description: 'Your browser does not support speech recognition.',
+            variant: 'destructive',
+         });
+         return; // Stop if not supported
+    }
+
+    if (isRecording) {
+        // If already recording, stop it
+        stopRecording();
+    } else {
+        // If not recording, start it
         try {
-            setTranscript('');
+            setTranscript(''); // Clear previous transcript
             recognitionRef.current.start();
             setIsRecording(true);
             toast({
@@ -401,27 +489,22 @@ export function TaskManager() {
             console.error("Error starting speech recognition:", error);
              toast({
                 title: 'Could not start recording',
-                description: error.message || 'Please ensure microphone permissions are granted.',
+                // Provide more specific error messages if possible
+                description: error.name === 'NotAllowedError' ? 'Microphone permission denied.' : (error.message || 'Please ensure microphone permissions are granted and the mic is working.'),
                 variant: 'destructive',
              });
              setIsRecording(false); // Ensure state is reset on error
         }
-    } else if (isRecording) {
-        // If already recording, stop it
-        stopRecording();
-    } else if (!recognitionRef.current) {
-         toast({
-            title: 'Voice Input Not Supported',
-            description: 'Your browser does not support speech recognition.',
-            variant: 'destructive',
-         });
     }
   };
 
+  // Explicit function to stop recording
   const stopRecording = () => {
     if (recognitionRef.current && isRecording) {
       recognitionRef.current.stop();
       setIsRecording(false);
+      // Optional: Add a toast indicating recording stopped manually
+      // toast({ title: 'Recording stopped.'});
     }
   };
 
@@ -440,37 +523,31 @@ export function TaskManager() {
 
         if (result.success && result.task) {
             const { name, description, dueDate: dueDateString, category } = result.task;
-            // Attempt to parse the date-time string from AI
-            let dueDate = parseISO(dueDateString); // parseISO handles 'YYYY-MM-DDTHH:mm:ss.sssZ' or 'YYYY-MM-DD'
+            // Attempt to parse the date-time string from AI (expects ISO 8601 UTC)
+            let dueDate = parseISO(dueDateString);
 
-            // If parsing fails or time is missing, default to 9:00 AM on that date or today
+            // Validate the parsed date
             if (!isValid(dueDate)) {
                  console.warn(`Invalid date/time format from AI: ${dueDateString}. Defaulting to today 9 AM.`);
-                 dueDate = defaultDueDate;
+                 dueDate = defaultDueDate; // Fallback to default
                  toast({
                      title: 'Date Parsing Warning',
                      description: `AI provided an invalid date/time (${dueDateString}). Task set to today 9 AM.`,
-                     variant: 'default',
+                     variant: 'default', // Use default variant for warning
+                     duration: 6000,
                  });
-            } else if (format(dueDate, 'HH:mm') === '00:00') {
-                // If AI only provided date (defaults to 00:00), set time to 9:00 AM
-                dueDate = setMinutes(setHours(dueDate, 9), 0);
-                toast({
-                    title: 'Time Defaulted',
-                    description: `AI didn't specify a time. Task set to 9:00 AM.`,
-                    variant: 'default',
-                });
             }
+            // No need to check for 00:00 time, as the AI prompt asks for specific time calculation including defaults.
 
             const newTask: PrioritizedTask = {
               id: crypto.randomUUID(),
               name: name,
               description: description,
-              dueDate: dueDate, // Use the potentially adjusted Date object
+              dueDate: dueDate, // Use the validated/defaulted Date object
               category: category,
               completed: false,
             };
-            setTasks((prevTasks) => [...prevTasks, newTask]);
+            setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())); // Sort by due date
             form.reset({ // Reset form including the date picker state visually
                 name: '',
                 description: '',
@@ -479,7 +556,7 @@ export function TaskManager() {
             });
             toast({
               title: '✅ Task Created from Voice!',
-              description: `"${name}" added. Due: ${format(dueDate, 'Pp')}`,
+              description: `"${name}" added. Due: ${format(dueDate, 'Pp')}`, // Format includes AM/PM
             });
         } else {
             toast({
@@ -498,33 +575,38 @@ export function TaskManager() {
         });
     } finally {
         setIsProcessingVoice(false);
-        setTranscript('');
+        setTranscript(''); // Clear transcript after processing
     }
 };
 
 
   async function onSubmit(data: TaskFormData) {
-    // Ensure dueDate has a time component, default to 9:00 AM if only date was selected
-     let finalDueDate = data.dueDate;
-     if (format(finalDueDate, 'HH:mm:ss') === '00:00:00') {
-       finalDueDate = setMinutes(setHours(finalDueDate, 9), 0);
-        toast({
-            title: "Default Time Applied",
-            description: "No time selected, task set to 9:00 AM.",
-            variant: "default",
-            duration: 3000,
-        });
+    // The DateTimePicker now handles setting a valid date with time (including default 9 AM)
+    let finalDueDate = data.dueDate;
+
+     // Double check if somehow the date is invalid right before adding
+     if (!finalDueDate || !isValid(finalDueDate)) {
+         console.error("Invalid date submitted in form:", data.dueDate);
+         toast({
+             title: "Invalid Date Error",
+             description: "The selected due date is invalid. Please select a valid date and time.",
+             variant: "destructive",
+         });
+         return; // Prevent adding task with invalid date
      }
+
+    // No need to default time here as DateTimePicker should handle it.
+    // if (format(finalDueDate, 'HH:mm:ss') === '00:00:00') { ... }
 
     const newTask: PrioritizedTask = {
       id: crypto.randomUUID(),
       name: data.name,
       description: data.description,
-      dueDate: finalDueDate, // Use the final date object with time
+      dueDate: finalDueDate, // Use the validated date object
       category: data.category,
       completed: false,
     };
-    setTasks((prevTasks) => [...prevTasks, newTask]);
+    setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())); // Sort by due date
     form.reset({ // Reset form fully after submission
         name: '',
         description: '',
@@ -533,7 +615,7 @@ export function TaskManager() {
     });
     toast({
       title: "Task Added",
-      description: `"${data.name}" added. Due: ${format(finalDueDate, 'Pp')}`,
+      description: `"${data.name}" added. Due: ${format(finalDueDate, 'Pp')}`, // Format includes AM/PM
     });
   }
 
@@ -548,25 +630,45 @@ export function TaskManager() {
     }
     setIsLoadingAI(true);
     try {
-      // Prepare tasks for AI, ensuring dueDate is in ISO format
-      const tasksToPrioritize = tasks.map(task => ({
-        description: task.description, // AI uses description
-        dueDate: task.dueDate.toISOString(), // Send full ISO string with time
+      // Prepare tasks for AI, ensuring dueDate is a valid Date and in ISO format
+      const tasksToPrioritize = tasks
+        .filter(task => task.dueDate && isValid(task.dueDate)) // Ensure valid dates
+        .map(task => ({
+            description: `${task.name} - ${task.description}`, // Combine name and desc for more context
+            dueDate: task.dueDate.toISOString(), // Send full ISO string with time
       }));
+
+        if (tasksToPrioritize.length === 0) {
+             toast({
+                title: 'No valid tasks to prioritize',
+                description: 'Ensure tasks have valid descriptions and due dates.',
+                variant: 'destructive',
+             });
+             setIsLoadingAI(false);
+             return;
+        }
 
       const prioritizedResult = await prioritizeTasks(tasksToPrioritize);
 
-      // Create a map for easy lookup using description + ISO dueDate string
+      // Create a map for easy lookup using the combined description + ISO dueDate string
       const priorityMap = new Map(prioritizedResult.map(p => [p.description + p.dueDate, p]));
 
       const updatedTasks = tasks.map(task => {
-        // Use the same key format to find the priority data
-        const key = task.description + task.dueDate.toISOString();
-        const priorityData = priorityMap.get(key);
-        return priorityData
-          ? { ...task, priority: priorityData.priority, reason: priorityData.reason }
-          : task; // Keep original task if no priority info found
-      }).sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity)); // Sort by priority
+          // Use the same key format to find the priority data
+          const key = `${task.name} - ${task.description}` + (task.dueDate && isValid(task.dueDate) ? task.dueDate.toISOString() : '');
+          const priorityData = key ? priorityMap.get(key) : undefined;
+          return priorityData
+             ? { ...task, priority: priorityData.priority, reason: priorityData.reason }
+             : task; // Keep original task if no priority info found (or date was invalid)
+        }).sort((a, b) => {
+            // Sort primarily by priority (lower number is higher priority)
+            const priorityDiff = (a.priority ?? Infinity) - (b.priority ?? Infinity);
+            if (priorityDiff !== 0) return priorityDiff;
+            // If priorities are the same (or both undefined), sort by due date (earlier first)
+            const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
+            const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
+            return dateA - dateB;
+        });
 
       setTasks(updatedTasks);
       toast({
@@ -597,25 +699,36 @@ export function TaskManager() {
   };
 
   const toggleTaskCompletion = (id: string) => {
+    let toggledTaskName = '';
+    let isNowCompleted: boolean | undefined = undefined;
+
     setTasks(prevTasks =>
-      prevTasks.map((task) =>
-        task.id === id ? { ...task, completed: !task.completed } : task
-      )
+      prevTasks.map((task) => {
+        if (task.id === id) {
+            toggledTaskName = task.name;
+            isNowCompleted = !task.completed; // Capture the *new* state
+            return { ...task, completed: !task.completed };
+        }
+        return task;
+      })
     );
 
-    // Find the task *after* state update to get the correct completed status for the toast
-    const updatedTask = tasks.find(task => task.id === id);
-     if (updatedTask) {
+    // Show toast *after* state update, using the captured new state
+    if (toggledTaskName && isNowCompleted !== undefined) {
          toast({
-          title: !updatedTask.completed ? 'Task Completed! 🎉' : 'Task Marked Incomplete',
-          description: `"${updatedTask.name}" status updated.`,
+          title: isNowCompleted ? 'Task Completed! 🎉' : 'Task Marked Incomplete',
+          description: `"${toggledTaskName}" status updated.`,
          });
      }
   };
 
-  const goals = tasks.filter(task => task.category === 'goal' && !task.completed);
-  const chores = tasks.filter(task => task.category === 'chore' && !task.completed);
+  // Separate lists based on completion status *first*
+  const incompleteTasks = tasks.filter(task => !task.completed);
   const completedTasks = tasks.filter(task => task.completed);
+
+  // Then categorize incomplete tasks
+  const goals = incompleteTasks.filter(task => task.category === 'goal');
+  const chores = incompleteTasks.filter(task => task.category === 'chore');
 
 
   const renderTaskList = (taskList: PrioritizedTask[], title: string) => (
@@ -641,103 +754,110 @@ export function TaskManager() {
           </p>
         ) : (
           <ul className="space-y-3">
-            {taskList.map((task) => (
-              <li
-                key={task.id}
-                className={cn(
-                  "flex items-start md:items-center justify-between p-4 rounded-lg border transition-all duration-200 group", // Use group for hover effects
-                  task.completed ? 'bg-secondary/30 border-dashed' : 'bg-card hover:bg-accent/40 hover:border-primary/50',
-                  isPast(task.dueDate) && !task.completed ? 'border-destructive shadow-sm shadow-destructive/20' : 'border-border'
-                )}
-              >
-                <div className="flex items-start space-x-4 flex-grow mr-2 overflow-hidden">
-                   {/* Checkbox - slightly larger and more padding */}
-                   <input
-                      type="checkbox"
-                      checked={task.completed}
-                      onChange={() => toggleTaskCompletion(task.id)}
-                      className="form-checkbox h-6 w-6 text-primary rounded-md border-gray-300 focus:ring-primary cursor-pointer mt-1 shrink-0"
-                      aria-label={`Mark task ${task.name} as ${task.completed ? 'incomplete' : 'complete'}`}
-                    />
+            {taskList.map((task) => {
+              // Ensure dueDate is valid before proceeding with rendering involving it
+               const isDueDateValid = task.dueDate && isValid(task.dueDate);
+               const formattedDueDate = isDueDateValid ? format(task.dueDate, 'Pp') : 'Invalid Date';
+               const isTaskOverdue = isDueDateValid && isPast(task.dueDate) && !task.completed;
 
-                  <div className="flex-grow overflow-hidden pt-0.5">
-                     {/* Task Name */}
-                    <span
-                      className={cn(
-                        "block font-semibold text-base truncate", // Slightly larger font
-                        task.completed ? 'line-through text-muted-foreground/80' : 'text-foreground'
-                      )}
-                      title={task.name}
-                    >
-                      {task.name}
-                       {/* Priority Badge */}
-                       {task.priority && !task.completed && (
-                        <Badge
-                          variant={task.priority <= 2 ? "destructive" : task.priority <= 5 ? "default" : "secondary"}
-                          className="ml-2 align-middle text-xs" // Align middle
-                          title={task.reason ? `Priority Reason: ${task.reason}` : `Priority: ${task.priority}`}
-                         >
-                         🔥 P{task.priority}
-                        </Badge>
-                      )}
-                    </span>
-                    {/* Task Description */}
-                     <span
-                      className={cn(
-                        "block text-sm mt-1 truncate",
-                        task.completed ? 'text-muted-foreground/60' : 'text-muted-foreground'
-                      )}
-                      title={task.description}
-                    >
-                      {task.description}
-                    </span>
-                     {/* Due Date, Overdue, Category */}
-                    <div className={cn("text-xs mt-2 flex items-center gap-2 flex-wrap", task.completed ? 'text-muted-foreground/60' : 'text-muted-foreground')}>
-                      <span className="flex items-center gap-1">
-                          <CalendarIcon className="h-3 w-3" />
-                          Due: {format(task.dueDate, 'Pp')} {/* Format with date and time */}
+               return (
+                <li
+                  key={task.id}
+                  className={cn(
+                    "flex items-start md:items-center justify-between p-4 rounded-lg border transition-all duration-200 group", // Use group for hover effects
+                    task.completed ? 'bg-secondary/30 border-dashed' : 'bg-card hover:bg-accent/40 hover:border-primary/50',
+                    isTaskOverdue ? 'border-destructive shadow-sm shadow-destructive/20' : 'border-border'
+                  )}
+                >
+                  <div className="flex items-start space-x-4 flex-grow mr-2 overflow-hidden">
+                     {/* Checkbox - slightly larger and more padding */}
+                     <input
+                        type="checkbox"
+                        checked={task.completed}
+                        onChange={() => toggleTaskCompletion(task.id)}
+                        className="form-checkbox h-6 w-6 text-primary rounded-md border-gray-300 focus:ring-primary cursor-pointer mt-1 shrink-0"
+                        aria-label={`Mark task ${task.name} as ${task.completed ? 'incomplete' : 'complete'}`}
+                      />
+
+                    <div className="flex-grow overflow-hidden pt-0.5">
+                       {/* Task Name */}
+                      <span
+                        className={cn(
+                          "block font-semibold text-base truncate", // Slightly larger font
+                          task.completed ? 'line-through text-muted-foreground/80' : 'text-foreground'
+                        )}
+                        title={task.name}
+                      >
+                        {task.name}
+                         {/* Priority Badge */}
+                         {task.priority && !task.completed && (
+                          <Badge
+                            variant={task.priority <= 2 ? "destructive" : task.priority <= 5 ? "default" : "secondary"}
+                            className="ml-2 align-middle text-xs" // Align middle
+                            title={task.reason ? `Priority Reason: ${task.reason}` : `Priority: ${task.priority}`}
+                           >
+                           🔥 P{task.priority}
+                          </Badge>
+                        )}
                       </span>
-                      {isPast(task.dueDate) && !task.completed && (
-                         <Badge variant="destructive" className="text-xs px-1.5 py-0.5">🚨 Overdue</Badge>
-                      )}
-                       <Badge variant="outline" className="capitalize text-xs px-1.5 py-0.5">{task.category}</Badge>
+                      {/* Task Description */}
+                       <span
+                        className={cn(
+                          "block text-sm mt-1 truncate",
+                          task.completed ? 'text-muted-foreground/60' : 'text-muted-foreground'
+                        )}
+                        title={task.description}
+                      >
+                        {task.description}
+                      </span>
+                       {/* Due Date, Overdue, Category */}
+                      <div className={cn("text-xs mt-2 flex items-center gap-2 flex-wrap", task.completed ? 'text-muted-foreground/60' : 'text-muted-foreground')}>
+                        <span className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3" />
+                            Due: {formattedDueDate}
+                        </span>
+                        {isTaskOverdue && (
+                           <Badge variant="destructive" className="text-xs px-1.5 py-0.5">🚨 Overdue</Badge>
+                        )}
+                         <Badge variant="outline" className="capitalize text-xs px-1.5 py-0.5">{task.category}</Badge>
+                      </div>
                     </div>
                   </div>
-                </div>
-                 {/* Delete Button */}
-                 <AlertDialog>
-                   <AlertDialogTrigger asChild>
-                    <Button
-                         variant="ghost"
-                         size="icon"
-                         className={cn(
-                             "text-muted-foreground hover:text-destructive shrink-0 transition-opacity duration-200",
-                             task.completed ? "opacity-50" : "opacity-70 group-hover:opacity-100" // Show on hover
-                         )}
-                    >
-                        <Trash2 className="h-4 w-4" />
-                        <span className="sr-only">Delete Task</span>
-                     </Button>
-                   </AlertDialogTrigger>
-                   <AlertDialogContent>
-                     <AlertDialogHeader>
-                       <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                       <AlertDialogDescription>
-                         This action cannot be undone. This will permanently delete the task
-                         <strong className="px-1">{task.name}</strong>
-                         due on <strong className="px-1">{format(task.dueDate, 'Pp')}</strong>.
-                       </AlertDialogDescription>
-                     </AlertDialogHeader>
-                     <AlertDialogFooter>
-                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                       <AlertDialogAction onClick={() => deleteTask(task.id)} className={buttonVariants({ variant: "destructive"})}>
-                         Yes, Delete Task
-                       </AlertDialogAction>
-                     </AlertDialogFooter>
-                   </AlertDialogContent>
-                 </AlertDialog>
-              </li>
-            ))}
+                   {/* Delete Button */}
+                   <AlertDialog>
+                     <AlertDialogTrigger asChild>
+                      <Button
+                           variant="ghost"
+                           size="icon"
+                           className={cn(
+                               "text-muted-foreground hover:text-destructive shrink-0 transition-opacity duration-200",
+                               task.completed ? "opacity-50" : "opacity-70 group-hover:opacity-100" // Show on hover
+                           )}
+                      >
+                          <Trash2 className="h-4 w-4" />
+                          <span className="sr-only">Delete Task</span>
+                       </Button>
+                     </AlertDialogTrigger>
+                     <AlertDialogContent>
+                       <AlertDialogHeader>
+                         <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                         <AlertDialogDescription>
+                           This action cannot be undone. This will permanently delete the task
+                           <strong className="px-1">{task.name}</strong>
+                           due on <strong className="px-1">{formattedDueDate}</strong>.
+                         </AlertDialogDescription>
+                       </AlertDialogHeader>
+                       <AlertDialogFooter>
+                         <AlertDialogCancel>Cancel</AlertDialogCancel>
+                         <AlertDialogAction onClick={() => deleteTask(task.id)} className={buttonVariants({ variant: "destructive"})}>
+                           Yes, Delete Task
+                         </AlertDialogAction>
+                       </AlertDialogFooter>
+                     </AlertDialogContent>
+                   </AlertDialog>
+                </li>
+            );
+         })}
           </ul>
         )}
       </CardContent>
@@ -760,11 +880,15 @@ export function TaskManager() {
          <Button
             variant={isRecording ? "destructive" : "outline"}
             size="icon"
-            onClick={startRecording} // Simplified: always call startRecording, it handles toggling
-            disabled={isProcessingVoice || isLoadingTasks}
-            className={cn("transition-colors duration-200", isRecording && "animate-pulse")}
+            onClick={startRecording} // Use unified function
+            disabled={isProcessingVoice || isLoadingTasks || !recognitionRef.current} // Disable if not supported
+            className={cn(
+                "transition-colors duration-200",
+                isRecording && "animate-pulse",
+                !recognitionRef.current && "opacity-50 cursor-not-allowed" // Style if not supported
+             )}
             aria-label={isRecording ? "Stop recording" : "Start recording voice command"}
-            title={isRecording ? "Stop Recording" : "Record Voice Command"}
+            title={!recognitionRef.current ? "Voice input not supported" : (isRecording ? "Stop Recording" : "Record Voice Command")}
           >
             {isProcessingVoice ? (
                 <Sparkles className="h-5 w-5 animate-spin" />

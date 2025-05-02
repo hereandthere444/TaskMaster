@@ -274,7 +274,8 @@ export function CalendarView() {
 
 
   return (
-    <div className="container mx-auto p-4 md:p-6 lg:p-8">
+    // Removed container mx-auto to allow full width within AppShell
+    <div className="p-4 md:p-6 lg:p-8 w-full">
       <header className="mb-6 border-b pb-4">
         <h1 className="text-3xl font-bold text-primary flex items-center gap-2">
           <CalendarDays className="w-7 h-7" /> Calendar View

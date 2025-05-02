@@ -4,7 +4,10 @@ import { CalendarView } from '@/components/calendar-view';
 export default function CalendarPage() {
   return (
     <AppShell>
-      <CalendarView />
+      {/* Ensure CalendarView can expand */}
+      <div className="flex flex-grow">
+        <CalendarView />
+      </div>
     </AppShell>
   );
 }
