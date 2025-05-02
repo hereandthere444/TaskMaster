@@ -259,7 +259,9 @@ const airiChatFlow = ai.defineFlow<
     // Call the LLM with the prompt and tools
     console.log("[airiChatFlow] Calling LLM...");
     const llmResponse = await ai.generate({
-        prompt: airiPrompt.compile(promptInputContext), // Compile the prompt with input context
+        prompt: airiPrompt, // Pass the prompt object directly
+        // Pass the compiled input context via the input field
+        input: promptInputContext,
         tools: [addTaskTool, prioritizeTasksTool], // Provide tools
         output: { schema: AiriChatOutputSchema }, // Define expected output schema
         // Add model specification if needed, e.g., model: 'googleai/gemini-pro'
