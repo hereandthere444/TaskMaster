@@ -2,12 +2,13 @@
 
 import type { Task } from '@/ai/flows/prioritize-tasks';
 import { prioritizeTasks } from '@/ai/flows/prioritize-tasks';
+import { createTaskFromVoice } from '@/ai/flows/create-task-from-voice'; // Import the new flow
 import { sendPersistentNotification } from '@/services/notification';
 import * as React from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Form,
   FormControl,
@@ -22,11 +23,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/componen
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Trash2, Sparkles, Zap, Calendar as CalendarIcon } from 'lucide-react';
+import { Trash2, Sparkles, Zap, Calendar as CalendarIcon, Mic, MicOff } from 'lucide-react'; // Added Mic, MicOff
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
-import { format, isPast } from 'date-fns';
+import { format, isPast, parseISO } from 'date-fns'; // Added parseISO
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -41,6 +42,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 
+// Extend window type for SpeechRecognition
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+
 
 interface PrioritizedTask extends Task {
   id: string;
@@ -49,6 +58,7 @@ interface PrioritizedTask extends Task {
   reason?: string;
   category: 'goal' | 'chore';
   completed: boolean;
+  dueDate: Date; // Ensure dueDate is always Date object
 }
 
 const taskFormSchema = z.object({
@@ -83,14 +93,19 @@ export function TaskManager() {
   const [tasks, setTasks] = React.useState<PrioritizedTask[]>([]);
   const [forceMode, setForceMode] = React.useState(false);
   const [isLoadingAI, setIsLoadingAI] = React.useState(false);
-  const [isLoadingTasks, setIsLoadingTasks] = React.useState(true); // Assume loading initially
+  const [isLoadingTasks, setIsLoadingTasks] = React.useState(true);
+  const [isRecording, setIsRecording] = React.useState(false); // State for voice recording
+  const [isProcessingVoice, setIsProcessingVoice] = React.useState(false); // State for AI voice processing
+  const [transcript, setTranscript] = React.useState(''); // State for transcript
   const { toast } = useToast();
   const notificationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  const recognitionRef = React.useRef<any>(null); // Ref for SpeechRecognition instance
+
 
   const form = useForm<TaskFormData>({
     resolver: zodResolver(taskFormSchema),
     defaultValues: {
-      name: '', // Default value for name
+      name: '',
       description: '',
       dueDate: undefined,
       category: 'goal',
@@ -105,27 +120,26 @@ export function TaskManager() {
           const parsedTasks: PrioritizedTask[] = JSON.parse(savedTasks).map((task: any) => ({
               ...task,
               name: task.name || task.description, // Add name, fallback to description for old tasks
-              // Ensure dueDate is a Date object
-              dueDate: task.dueDate ? new Date(task.dueDate) : new Date(),
+              // Ensure dueDate is a Date object, handle invalid dates
+              dueDate: task.dueDate && !isNaN(new Date(task.dueDate).getTime()) ? new Date(task.dueDate) : new Date(),
           }));
           setTasks(parsedTasks);
       }
     } catch (error) {
         console.error("Failed to load tasks from localStorage:", error);
-        // Handle error, maybe show a toast notification
         toast({
           title: "Error Loading Tasks",
           description: "Could not load tasks from local storage.",
           variant: "destructive",
         });
     } finally {
-        setIsLoadingTasks(false); // Set loading to false after attempting to load
+        setIsLoadingTasks(false);
     }
    }, [toast]);
 
   // Save tasks to localStorage whenever tasks change
   React.useEffect(() => {
-      if (!isLoadingTasks) { // Only save after initial load
+      if (!isLoadingTasks) {
           try {
               localStorage.setItem('tasks', JSON.stringify(tasks));
           } catch (error) {
@@ -139,7 +153,6 @@ export function TaskManager() {
       }
   }, [tasks, isLoadingTasks, toast]);
 
-
   // Force mode effect
   React.useEffect(() => {
     if (forceMode) {
@@ -150,20 +163,18 @@ export function TaskManager() {
           const messageType = Math.random() < 0.5 ? 'motivational' : 'taunting';
           const messages = messageType === 'motivational' ? motivationalMessages : tauntingMessages;
           const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-          const notificationMessage = `Reminder: "${randomTask.name}" is due ${format(randomTask.dueDate, 'PPP')}. ${randomMessage}`; // Use task name
+          const notificationMessage = `Reminder: "${randomTask.name}" is due ${format(randomTask.dueDate, 'PPP')}. ${randomMessage}`;
 
-          // Send persistent notification (console log for now)
           sendPersistentNotification(notificationMessage);
 
-          // Show toast notification
           toast({
             title: `🚨 Task Reminder (${messageType}) 🚨`,
             description: notificationMessage,
             variant: isPast(randomTask.dueDate) ? "destructive" : "default",
-            duration: 10000, // Show for 10 seconds
+            duration: 10000,
           });
         }
-      }, 30000); // Send reminder every 30 seconds in force mode
+      }, 30000);
 
       toast({
         title: "Force Mode Activated!",
@@ -183,7 +194,6 @@ export function TaskManager() {
       });
     }
 
-    // Cleanup interval on component unmount or when forceMode changes
     return () => {
       if (notificationIntervalRef.current) {
         clearInterval(notificationIntervalRef.current);
@@ -191,10 +201,153 @@ export function TaskManager() {
     };
   }, [forceMode, tasks, toast]);
 
+  // Initialize Speech Recognition
+  React.useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event: any) => {
+        const currentTranscript = event.results[0][0].transcript;
+        setTranscript(currentTranscript);
+        handleVoiceCommand(currentTranscript); // Process the transcript immediately
+        setIsRecording(false); // Stop recording visual state
+      };
+
+      recognitionRef.current.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        toast({
+          title: 'Voice Recognition Error',
+          description: `Error: ${event.error}. Please try again.`,
+          variant: 'destructive',
+        });
+        setIsRecording(false);
+        setIsProcessingVoice(false);
+      };
+
+      recognitionRef.current.onend = () => {
+        // Only set recording to false if it wasn't stopped by error or result
+        if (isRecording) {
+           setIsRecording(false);
+        }
+      };
+    } else {
+      console.warn('Speech Recognition not supported in this browser.');
+      // Optionally disable the mic button or show a message
+    }
+
+    // Cleanup function to stop recognition if component unmounts while recording
+    return () => {
+        if (recognitionRef.current && isRecording) {
+            recognitionRef.current.stop();
+        }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRecording]); // Re-run effect if isRecording changes to ensure onend works correctly
+
+  const startRecording = () => {
+    if (recognitionRef.current && !isRecording) {
+        try {
+            setTranscript(''); // Clear previous transcript
+            recognitionRef.current.start();
+            setIsRecording(true);
+            toast({
+                title: '🎙️ Listening...',
+                description: 'Speak your task command clearly.',
+            });
+        } catch (error) {
+            console.error("Error starting speech recognition:", error);
+             toast({
+                title: 'Could not start recording',
+                description: 'Please ensure microphone permissions are granted.',
+                variant: 'destructive',
+             });
+             setIsRecording(false);
+        }
+    } else if (!recognitionRef.current) {
+         toast({
+            title: 'Voice Input Not Supported',
+            description: 'Your browser does not support speech recognition.',
+            variant: 'destructive',
+         });
+    }
+  };
+
+  const stopRecording = () => {
+    if (recognitionRef.current && isRecording) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+      // Processing will happen in the 'onresult' handler
+    }
+  };
+
+  const handleVoiceCommand = async (command: string) => {
+    if (!command) return;
+
+    setIsProcessingVoice(true);
+    toast({
+        title: '🧠 Processing Voice Command...',
+        description: `"${command}"`,
+    });
+
+    try {
+      const result = await createTaskFromVoice({ command });
+
+      if (result.success && result.task) {
+        const { name, description, dueDate: dueDateString, category } = result.task;
+        // Attempt to parse the date string from AI; fallback to today if invalid
+        let dueDate = parseISO(dueDateString);
+        if (isNaN(dueDate.getTime())) {
+            console.warn(`Invalid date format from AI: ${dueDateString}. Defaulting to today.`);
+            dueDate = new Date(); // Default to today if parsing fails
+             toast({
+                title: 'Date Parsing Warning',
+                description: `AI provided an invalid date (${dueDateString}). Task set to today.`,
+                variant: 'default', // Or 'warning' if you add that variant
+             });
+        }
+
+        const newTask: PrioritizedTask = {
+          id: crypto.randomUUID(),
+          name: name,
+          description: description,
+          dueDate: dueDate, // Use the parsed (or default) Date object
+          category: category,
+          completed: false,
+        };
+        setTasks((prevTasks) => [...prevTasks, newTask]);
+        toast({
+          title: '✅ Task Created from Voice!',
+          description: `"${name}" added to your list.`,
+        });
+      } else {
+        toast({
+          title: '⚠️ Could Not Create Task',
+          description: result.explanation || 'The AI could not understand the task details. Please try again or add manually.',
+          variant: 'destructive',
+        });
+      }
+    } catch (error) {
+      console.error('Error processing voice command with AI:', error);
+      toast({
+        title: 'AI Processing Failed',
+        description: 'Could not process the voice command. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsProcessingVoice(false);
+      setTranscript(''); // Clear transcript after processing
+    }
+  };
+
+
   async function onSubmit(data: TaskFormData) {
     const newTask: PrioritizedTask = {
       id: crypto.randomUUID(),
-      name: data.name, // Add name
+      name: data.name,
       description: data.description,
       dueDate: data.dueDate, // Keep as Date object
       category: data.category,
@@ -204,7 +357,7 @@ export function TaskManager() {
     form.reset();
     toast({
       title: "Task Added",
-      description: `"${data.name}" added to your list.`, // Use name in toast
+      description: `"${data.name}" added to your list.`,
     });
   }
 
@@ -219,8 +372,6 @@ export function TaskManager() {
     }
     setIsLoadingAI(true);
     try {
-        // Note: AI flow currently uses description, not name.
-        // If name should affect prioritization, update the AI flow.
       const tasksToPrioritize = tasks.map(task => ({
         description: task.description, // AI uses description
         dueDate: task.dueDate.toISOString(),
@@ -228,7 +379,6 @@ export function TaskManager() {
 
       const prioritizedResult = await prioritizeTasks(tasksToPrioritize);
 
-      // Create a map for easy lookup based on description + dueDate as the AI doesn't know the ID or name
       const priorityMap = new Map(prioritizedResult.map(p => [p.description + p.dueDate, p]));
 
       const updatedTasks = tasks.map(task => {
@@ -236,8 +386,8 @@ export function TaskManager() {
         const priorityData = priorityMap.get(key);
         return priorityData
           ? { ...task, priority: priorityData.priority, reason: priorityData.reason }
-          : task; // Keep original task if not found in prioritized results
-      }).sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity)); // Sort by priority
+          : task;
+      }).sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity));
 
       setTasks(updatedTasks);
       toast({
@@ -262,7 +412,7 @@ export function TaskManager() {
     setTasks(tasks.filter((task) => task.id !== id));
     toast({
       title: 'Task Deleted',
-      description: `"${taskToDelete?.name}" removed from your list.`, // Use name in toast
+      description: `"${taskToDelete?.name}" removed from your list.`,
       variant: 'destructive'
     });
   };
@@ -279,7 +429,7 @@ export function TaskManager() {
 
      toast({
       title: updatedTask.completed ? 'Task Marked Incomplete' : 'Task Completed!',
-      description: `"${updatedTask.name}" status updated.`, // Use name in toast
+      description: `"${updatedTask.name}" status updated.`,
      });
   };
 
@@ -319,34 +469,34 @@ export function TaskManager() {
                     checked={task.completed}
                     onChange={() => toggleTaskCompletion(task.id)}
                     className="form-checkbox h-5 w-5 text-primary rounded focus:ring-primary cursor-pointer shrink-0"
-                    aria-label={`Mark task ${task.name} as ${task.completed ? 'incomplete' : 'complete'}`} // Use name in aria-label
+                    aria-label={`Mark task ${task.name} as ${task.completed ? 'incomplete' : 'complete'}`}
                   />
                   <div className="flex-grow overflow-hidden">
                     <span
                       className={cn(
-                        "block font-semibold truncate", // Changed from font-medium to font-semibold
+                        "block font-semibold truncate",
                         task.completed ? 'line-through text-muted-foreground' : 'text-foreground'
                       )}
-                      title={task.name} // Use name in title attribute
+                      title={task.name}
                     >
-                      {task.name} {/* Display task name */}
+                      {task.name}
                     </span>
                      <span
                       className={cn(
-                        "block text-sm truncate", // Added description display
+                        "block text-sm truncate",
                         task.completed ? 'text-muted-foreground/70' : 'text-muted-foreground'
                       )}
                       title={task.description}
                     >
                       {task.description}
                     </span>
-                    <span className={cn("text-xs pt-1", task.completed ? 'text-muted-foreground/70' : 'text-muted-foreground')}> {/* Adjusted text size and padding */}
+                    <span className={cn("text-xs pt-1", task.completed ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
                       Due: {format(task.dueDate, 'PPP')}
                       {isPast(task.dueDate) && !task.completed && (
                          <Badge variant="destructive" className="ml-2">Overdue</Badge>
                       )}
                        {task.priority && !task.completed && (
-                        <Badge variant={task.priority <= 3 ? "default" : "secondary"} className="ml-2" title={task.reason ?? undefined}> {/* Ensure title is string or undefined */}
+                        <Badge variant={task.priority <= 3 ? "default" : "secondary"} className="ml-2" title={task.reason ?? undefined}>
                           P{task.priority}
                         </Badge>
                       )}
@@ -354,7 +504,7 @@ export function TaskManager() {
                     </span>
                   </div>
                 </div>
-                <AlertDialog>
+                 <AlertDialog>
                    <AlertDialogTrigger asChild>
                     <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive shrink-0">
                         <Trash2 className="h-4 w-4" />
@@ -366,7 +516,7 @@ export function TaskManager() {
                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                        <AlertDialogDescription>
                          This action cannot be undone. This will permanently delete the task
-                         "{task.name}". {/* Use name in dialog */}
+                         "{task.name}".
                        </AlertDialogDescription>
                      </AlertDialogHeader>
                      <AlertDialogFooter>
@@ -377,7 +527,6 @@ export function TaskManager() {
                      </AlertDialogFooter>
                    </AlertDialogContent>
                  </AlertDialog>
-
               </li>
             ))}
           </ul>
@@ -392,6 +541,25 @@ export function TaskManager() {
       <header className="mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
         <h1 className="text-3xl font-bold text-primary">TaskMaster</h1>
         <div className="flex items-center space-x-4">
+         {/* Voice Command Button */}
+         <Button
+            variant="outline"
+            size="icon"
+            onClick={isRecording ? stopRecording : startRecording}
+            disabled={isProcessingVoice || isLoadingTasks}
+            className={cn(isRecording && "text-destructive border-destructive animate-pulse")}
+            aria-label={isRecording ? "Stop recording" : "Start recording voice command"}
+          >
+            {isProcessingVoice ? (
+                <Sparkles className="h-5 w-5 animate-spin" /> // Use Sparkles or other loading indicator
+            ) : isRecording ? (
+              <MicOff className="h-5 w-5" />
+            ) : (
+              <Mic className="h-5 w-5" />
+            )}
+          </Button>
+
+          {/* Prioritize Button */}
           <Button onClick={handlePrioritize} disabled={isLoadingAI || isLoadingTasks || tasks.length === 0}>
             {isLoadingAI ? (
               <>
@@ -403,6 +571,8 @@ export function TaskManager() {
               </>
             )}
           </Button>
+
+           {/* Force Mode Switch */}
           <div className="flex items-center space-x-2">
              <Zap className={`h-5 w-5 ${forceMode ? 'text-destructive animate-pulse' : 'text-muted-foreground'}`} />
              <Label htmlFor="force-mode" className={cn("font-semibold", forceMode ? 'text-destructive' : 'text-muted-foreground')}>
@@ -418,6 +588,7 @@ export function TaskManager() {
         </div>
       </header>
 
+       {/* Task Form */}
       <Card className="mb-8 shadow-md">
         <CardHeader>
           <CardTitle>Add New Task</CardTitle>
@@ -506,8 +677,8 @@ export function TaskManager() {
                                         id="goal"
                                         value="goal"
                                         checked={field.value === 'goal'}
-                                        onChange={field.onChange}
-                                        className="form-radio h-4 w-4 text-primary focus:ring-primary"
+                                        onChange={() => field.onChange('goal')} // Ensure correct value is passed
+                                        className="form-radio h-4 w-4 text-primary focus:ring-primary cursor-pointer"
                                     />
                                 </FormControl>
                                 <Label htmlFor="goal" className="font-normal cursor-pointer">Goal (Important)</Label>
@@ -519,8 +690,8 @@ export function TaskManager() {
                                         id="chore"
                                         value="chore"
                                         checked={field.value === 'chore'}
-                                        onChange={field.onChange}
-                                         className="form-radio h-4 w-4 text-primary focus:ring-primary"
+                                        onChange={() => field.onChange('chore')} // Ensure correct value is passed
+                                         className="form-radio h-4 w-4 text-primary focus:ring-primary cursor-pointer"
                                     />
                                 </FormControl>
                                 <Label htmlFor="chore" className="font-normal cursor-pointer">Chore (Less Important)</Label>
@@ -540,7 +711,7 @@ export function TaskManager() {
         </CardContent>
       </Card>
 
-
+       {/* Task Lists */}
       {renderTaskList(goals, '🎯 Goals')}
       {renderTaskList(chores, '🧹 Chores')}
       {completedTasks.length > 0 && renderTaskList(completedTasks, '✅ Completed Tasks')}
@@ -549,11 +720,28 @@ export function TaskManager() {
   );
 }
 
-// Helper function used in AlertDialog
-const buttonVariants = (options: { variant: 'destructive' | 'default' | 'outline' | 'secondary' | 'ghost' | 'link' | null | undefined }) => {
-    if (options.variant === 'destructive') {
-        return "bg-destructive text-destructive-foreground hover:bg-destructive/90";
+
+// Helper function used in AlertDialog - kept as is
+const getButtonVariantClasses = (options: { variant: 'destructive' | 'default' | 'outline' | 'secondary' | 'ghost' | 'link' | null | undefined }) => {
+    switch (options.variant) {
+        case 'destructive':
+            return "bg-destructive text-destructive-foreground hover:bg-destructive/90";
+        case 'outline':
+             return "border border-input bg-background hover:bg-accent hover:text-accent-foreground";
+        case 'secondary':
+             return "bg-secondary text-secondary-foreground hover:bg-secondary/80";
+        case 'ghost':
+             return "hover:bg-accent hover:text-accent-foreground";
+        case 'link':
+            return "text-primary underline-offset-4 hover:underline";
+        default:
+            return "bg-primary text-primary-foreground hover:bg-primary/90";
     }
-    // Add other variants if needed, returning ShadCN button style classes
-    return "bg-primary text-primary-foreground hover:bg-primary/90";
 };
+
+// Use this helper in the AlertDialogAction for destructive variant
+// Example: className={getButtonVariantClasses({ variant: "destructive"})}
+// Make sure `buttonVariants` from ui/button is also available if needed elsewhere
+// or replace its usage with this helper if appropriate.
+// For the specific use case in AlertDialogAction for delete, this is sufficient:
+// className={getButtonVariantClasses({ variant: "destructive"})}
