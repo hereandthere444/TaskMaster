@@ -9,7 +9,6 @@ import { format, isValid, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-// import { v4 as uuidv4 } from 'uuid'; // Use crypto.randomUUID for modern browsers
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -69,10 +68,22 @@ import {
   SheetFooter,
   SheetClose,
   SheetTrigger,
-} from '@/components/ui/sheet'; // Import Sheet components
-import { ScrollArea } from '@/components/ui/scroll-area'; // Import ScrollArea
-import { Badge } from '@/components/ui/badge'; // Import Badge
-import { Switch } from '@/components/ui/switch'; // Import Switch
+} from '@/components/ui/sheet';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -88,10 +99,12 @@ import {
   MicOff,
   Volume2,
   VolumeX,
+  Target, // Icon for Goals
+  ListChecks, // Icon for Chores
 } from 'lucide-react';
 import { Skeleton } from './ui/skeleton';
-import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData as AiriPrioritizedTaskData } from '@/ai/flows/airi-chat-flow'; // Import Airi chat flow
-import type { CreateTaskOutput as AiriCreatedTask } from '@/ai/schemas'; // Import shared type
+import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData as AiriPrioritizedTaskData } from '@/ai/flows/airi-chat-flow';
+import type { CreateTaskOutput as AiriCreatedTask } from '@/ai/schemas';
 
 // Define the structure of a task
 export interface PrioritizedTask {
@@ -145,6 +158,8 @@ export function TaskManager() {
   const [isTTSEnabled, setIsTTSEnabled] = React.useState(true);
   const [voices, setVoices] = React.useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = React.useState<SpeechSynthesisVoice | null>(null);
+  const [activeTab, setActiveTab] = React.useState<'goals' | 'chores'>('goals');
+
 
   const { toast } = useToast();
   const recognitionRef = React.useRef<any>(null); // Ref for SpeechRecognition instance
@@ -214,7 +229,7 @@ export function TaskManager() {
                 v.name.toLowerCase().includes('female') ||
                 v.name.toLowerCase().includes('woman') ||
                 // Some voices don't explicitly mention gender but are known female
-                v.name.match(/Samantha|Victoria|Karen|Tessa|Google UK English Female|Google US English/i) // Add more known female voice names
+                v.name.match(/Samantha|Victoria|Karen|Tessa|Google UK English Female|Google US English|Zira|Natasha/i) // Added Zira/Natasha
             );
 
             // 3. Prioritize "Google" or higher quality voices if available.
@@ -224,13 +239,16 @@ export function TaskManager() {
              }
              // Add prioritization for known high-quality OS voices (examples)
              if (!bestVoice) {
-                 bestVoice = femaleEnglishVoices.find(v => v.name.includes('Samantha') || v.name.includes('Victoria')); // Example: macOS voices
+                 bestVoice = femaleEnglishVoices.find(v => v.name.includes('Samantha') || v.name.includes('Victoria') || v.name.includes('Zira') || v.name.includes('Natasha')); // Example: macOS/Windows voices
              }
 
-            // 4. Fallback: Any female English voice.
-            if (!bestVoice) {
-                bestVoice = femaleEnglishVoices[0];
-            }
+             // 4. Fallback: Any female English voice.
+             if (!bestVoice) {
+                 bestVoice = femaleEnglishVoices.find(v => v.lang === 'en-US'); // Prefer US Female
+             }
+             if (!bestVoice) {
+                 bestVoice = femaleEnglishVoices[0]; // Any Female English voice
+             }
 
             // 5. Fallback: Any English voice.
             if (!bestVoice) {
@@ -278,9 +296,11 @@ export function TaskManager() {
     return () => {
         if ('speechSynthesis' in window) {
             window.speechSynthesis.onvoiceschanged = null; // Cleanup listener
+            window.speechSynthesis.cancel(); // Cancel any speech on unmount
         }
     };
-}, []); // Empty dependency array ensures this runs once on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array ensures this runs once on mount
 
 
   // --- Form Handling ---
@@ -291,9 +311,22 @@ export function TaskManager() {
       description: '',
       dueDate: undefined, // Initialize as undefined
       dueTime: '', // Default to empty string
-      category: 'goal',
+      category: activeTab === 'goals' ? 'goal' : 'chore', // Default based on active tab
     },
   });
+
+   // Update default category when tab changes
+   React.useEffect(() => {
+    taskForm.reset({ // Reset form to update default category
+      name: '',
+      description: '',
+      dueDate: undefined,
+      dueTime: '',
+      category: activeTab === 'goals' ? 'goal' : 'chore',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [activeTab]); // Depend on activeTab
+
 
   const airiChatForm = useForm<AiriChatFormData>({
     resolver: zodResolver(airiChatFormSchema),
@@ -377,7 +410,13 @@ export function TaskManager() {
         setTasks([newTask, ...tasks]);
         toast({ title: 'Task Added', description: `"${data.name}" has been added.` });
       }
-      taskForm.reset();
+      taskForm.reset({ // Reset with category based on active tab
+         name: '',
+         description: '',
+         dueDate: undefined,
+         dueTime: '',
+         category: activeTab === 'goals' ? 'goal' : 'chore',
+       });
       setEditingTask(null);
       setIsEditDialogOpen(false); // Close dialog after submission
     } catch (error) {
@@ -488,7 +527,7 @@ export function TaskManager() {
         currentTasks: tasks.filter(t => !t.completed).map(t => ({
             id: t.id,
             name: t.name,
-            description: t.description,
+            description: `${t.name}: ${t.description}`, // Combine name and description for better context
             dueDate: isValid(t.dueDate) ? t.dueDate.toISOString() : new Date().toISOString(), // Send ISO string
             category: t.category,
             completed: t.completed,
@@ -501,32 +540,61 @@ export function TaskManager() {
       console.log("Received from Airi:", JSON.stringify(airiOutput, null, 2)); // Log output
 
       // Add Airi's response to chat history
-      setChatMessages((prev) => [
-        ...prev,
-        { role: 'airi', content: airiOutput.response },
-      ]);
+       // Check if response exists before adding
+        if (airiOutput.response) {
+            setChatMessages((prev) => [
+            ...prev,
+            { role: 'airi', content: airiOutput.response },
+            ]);
+            speakText(airiOutput.response); // Speak Airi's response
+        } else if (!airiOutput.success) {
+             // If no response and it failed, add the error message
+             const errorMessage = airiOutput.error || "Something went wrong, but Airi didn't say what.";
+              setChatMessages((prev) => [
+                ...prev,
+                { role: 'system', content: `Error: ${errorMessage}` },
+              ]);
+             speakText(`Error: ${errorMessage}`);
+        } else {
+            // Success but no response (should ideally not happen with the prompt asking for a response)
+             const defaultResponse = "Hmph. I processed that, but have nothing else to say.";
+              setChatMessages((prev) => [
+                ...prev,
+                { role: 'airi', content: defaultResponse },
+              ]);
+             speakText(defaultResponse);
+        }
 
-      speakText(airiOutput.response); // Speak Airi's response
 
       // --- Handle side effects from Airi's response ---
 
       // 1. Task Creation
       if (airiOutput.createdTask) {
           // Ensure createdTask has the expected structure before proceeding
-          const createdTaskData = airiOutput.createdTask as AiriCreatedTask | undefined; // Use imported type, allow undefined
+          // Important: Use the correct type that includes 'id' etc.
+          const createdTaskData = airiOutput.createdTask as PrioritizedTask | undefined; // Assuming PrioritizedTask is the correct structure
+
 
           if (createdTaskData && createdTaskData.id && createdTaskData.name && createdTaskData.dueDate) {
               console.log("Airi reported task creation:", createdTaskData);
               // Ensure dueDate is valid before adding
-              const parsedDueDate = parseISO(createdTaskData.dueDate);
-              if (isValid(parsedDueDate)) {
+              // The dueDate from createdTask might already be a Date object if mapped correctly, or an ISO string
+              let parsedDueDate: Date | null = null;
+              if (createdTaskData.dueDate instanceof Date && isValid(createdTaskData.dueDate)) {
+                  parsedDueDate = createdTaskData.dueDate;
+              } else if (typeof createdTaskData.dueDate === 'string') {
+                  parsedDueDate = parseISO(createdTaskData.dueDate);
+              }
+
+              if (parsedDueDate && isValid(parsedDueDate)) {
+                   // Ensure the created task has all required fields, providing defaults if necessary
                   const newTask: PrioritizedTask = {
                       id: createdTaskData.id,
                       name: createdTaskData.name,
-                      description: createdTaskData.description || '', // Handle potentially missing description
-                      dueDate: parsedDueDate, // Convert ISO string back to Date object
-                      category: createdTaskData.category || 'goal', // Handle potentially missing category
-                      completed: createdTaskData.completed || false, // Handle potentially missing completed status
+                      description: createdTaskData.description || '',
+                      dueDate: parsedDueDate, // Use the validated Date object
+                      category: createdTaskData.category || 'goal', // Default category if missing
+                      completed: createdTaskData.completed || false, // Default completed status
                       priority: createdTaskData.priority,
                       reason: createdTaskData.reason,
                   };
@@ -536,7 +604,7 @@ export function TaskManager() {
                       description: `"${newTask.name}" was created. It wasn't *that* hard.`,
                   });
               } else {
-                  console.warn("Airi created a task with an invalid date:", createdTaskData);
+                  console.warn("Airi created a task with an invalid or unparseable date:", createdTaskData.dueDate);
                   toast({
                       title: "Airi Task Error",
                       description: "Airi tried to add a task, but messed up the date. Typical.",
@@ -544,7 +612,7 @@ export function TaskManager() {
                   });
               }
           } else {
-               console.warn("Airi reported task creation, but data is incomplete:", createdTaskData);
+               console.warn("Airi reported task creation, but data is incomplete or malformed:", createdTaskData);
                // Optionally inform the user, but might be confusing if AI mentioned adding a task
           }
       }
@@ -552,8 +620,9 @@ export function TaskManager() {
 
       // 2. Task Prioritization
       if (airiOutput.prioritizedTasks && airiOutput.prioritizedTasks.length > 0) {
+          // The output schema for prioritizedTasks now includes 'id' and 'name'
           const priorities: AiriPrioritizedTaskData[] = airiOutput.prioritizedTasks;
-          console.log("Priorities received from Airi:", priorities); // Log received data
+          console.log("Priorities received from Airi:", priorities);
 
           setTasks(prevTasks => {
                const taskMap = new Map(prevTasks.map(task => [task.id, task]));
@@ -561,30 +630,25 @@ export function TaskManager() {
                let prioritiesApplied = false;
 
                priorities.forEach(p => {
-                   const task = taskMap.get(p.id);
-                   if (task && p.priority !== undefined) { // Check if priority value exists
+                   const task = taskMap.get(p.id); // Use the ID provided by the tool output
+                   if (task && p.priority !== undefined) {
                        console.log(`Applying priority to task ${task.id} (${task.name}):`, p);
                        updatedTasks.push({
                            ...task,
                            priority: p.priority,
                            reason: p.reason,
                        });
-                       taskMap.delete(p.id); // Remove from map to track processed tasks
+                       taskMap.delete(p.id);
                        prioritiesApplied = true;
                    } else {
-                       console.warn(`Could not find task with ID ${p.id} or priority data is missing for prioritization update.`);
+                       console.warn(`Could not find task with ID ${p.id} or priority data is missing for prioritization update. Airi name: ${p.name}`);
                    }
                });
 
                // Add back tasks that were not in the prioritization result
                taskMap.forEach(task => {
-                   // Decide whether to reset priority for tasks not mentioned by Airi
-                   // Option 1: Reset priority
-                   // updatedTasks.push({ ...task, priority: undefined, reason: undefined });
-                   // Option 2: Keep existing priority (current implementation)
-                   updatedTasks.push(task);
+                   updatedTasks.push(task); // Keep existing priorities for non-updated tasks
                });
-
 
                if (prioritiesApplied) {
                     toast({
@@ -592,7 +656,6 @@ export function TaskManager() {
                         description: "Hmph. Fine, I prioritized them. Now get to work.",
                     });
                } else if (airiOutput.prioritizedTasks.length > 0) {
-                    // This case means Airi returned priorities, but none matched existing tasks
                     toast({
                         title: "Airi Prioritization Mismatch",
                         description: "Airi tried to prioritize, but couldn't match the tasks. Maybe they changed?",
@@ -601,10 +664,17 @@ export function TaskManager() {
                }
 
                console.log("Tasks after potential priority update:", updatedTasks);
-               // Return the potentially modified list
-               return updatedTasks; // Return the new array
+               return updatedTasks.sort((a, b) => { // Re-sort after update
+                    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+                    if (a.priority !== undefined && b.priority !== undefined) {
+                        if (a.priority !== b.priority) return a.priority - b.priority;
+                    } else if (a.priority !== undefined) return -1;
+                    else if (b.priority !== undefined) return 1;
+                    const timeA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
+                    const timeB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
+                    return timeA - timeB;
+                });
            });
-
       }
 
 
@@ -691,7 +761,7 @@ export function TaskManager() {
              //    console.log("Speech recognition ended unexpectedly.");
              // }
              // Safer: Rely on result/error handlers or manual toggle to set false
-             // setIsListening(false); // Simpler approach: always set false on end
+             setIsListening(false); // Simpler approach: always set false on end
         };
 
         recognitionRef.current = recognition;
@@ -703,7 +773,7 @@ export function TaskManager() {
             }
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [airiChatForm, toast]); // Removed onSubmitAiriChat dependency - form.handleSubmit handles it
+    }, [toast]); // Removed airiChatForm, onSubmitAiriChat dependency
 
 
     const toggleListening = () => {
@@ -785,8 +855,121 @@ export function TaskManager() {
     });
   }, [tasks]);
 
-  const pendingTasks = React.useMemo(() => sortedTasks.filter(task => !task.completed), [sortedTasks]);
+  const pendingGoals = React.useMemo(() => sortedTasks.filter(task => !task.completed && task.category === 'goal'), [sortedTasks]);
+  const pendingChores = React.useMemo(() => sortedTasks.filter(task => !task.completed && task.category === 'chore'), [sortedTasks]);
   const completedTasks = React.useMemo(() => sortedTasks.filter(task => task.completed), [sortedTasks]);
+
+   // --- Task List Rendering Function ---
+   const renderTaskList = (taskList: PrioritizedTask[], isCompletedList = false) => {
+    if (isLoadingTasks && !isCompletedList) { // Only show loading skeleton for pending lists initially
+        return (
+            <div className="space-y-3 p-1">
+                <Skeleton className="h-14 w-full" />
+                <Skeleton className="h-14 w-full" />
+                <Skeleton className="h-14 w-full" />
+            </div>
+        );
+    }
+
+    if (taskList.length === 0) {
+        return (
+            <p className="text-center text-muted-foreground italic py-6">
+                {isCompletedList ? "No completed tasks yet." : "No tasks here. Add one!"}
+            </p>
+        );
+    }
+
+    return (
+        <ul className="space-y-3">
+            {taskList.map((task) => (
+                <li
+                    key={task.id}
+                    className={cn(
+                        "flex items-start gap-3 p-3 border rounded-lg transition-colors",
+                        isCompletedList
+                            ? 'bg-secondary/30 border-dashed opacity-70' // Style for completed tasks
+                            : cn(
+                                'hover:bg-accent/50', // Hover for pending
+                                task.priority === 1 && "border-l-4 border-l-destructive",
+                                task.priority === 2 && "border-l-4 border-l-orange-500",
+                                task.priority === 3 && "border-l-4 border-l-yellow-500"
+                              )
+                    )}
+                >
+                    <Checkbox
+                        id={`task-${task.id}`}
+                        checked={task.completed}
+                        onCheckedChange={() => handleToggleComplete(task.id)}
+                        aria-label={`Mark task "${task.name}" as ${task.completed ? 'incomplete' : 'complete'}`}
+                        className={cn("mt-1 shrink-0", isCompletedList && "opacity-70")}
+                    />
+                    <div className="flex-1 overflow-hidden mr-2">
+                        <Label
+                            htmlFor={`task-${task.id}`}
+                            className={cn(
+                                "font-medium cursor-pointer block",
+                                task.completed ? 'line-through text-muted-foreground/80' : ''
+                            )}
+                        >
+                            {!isCompletedList && task.priority && (
+                                <Badge variant="secondary" className="mr-1.5 px-1 py-0 text-[10px]">
+                                    P{task.priority}
+                                </Badge>
+                            )}
+                            {task.name}
+                        </Label>
+                        <p className={cn(
+                            "text-xs mt-0.5",
+                            task.completed ? "text-muted-foreground/60" : "text-muted-foreground"
+                         )}>
+                            Due: {task.dueDate && isValid(task.dueDate) ? format(task.dueDate, 'MMM d, yyyy, h:mm a') : 'Invalid Date'}
+                        </p>
+                        {(task.description || task.reason) && (
+                            <p className={cn(
+                                "text-xs mt-1 line-clamp-2",
+                                task.completed ? "text-muted-foreground/50" : "text-muted-foreground/80"
+                            )} title={task.description + (task.reason ? ` (Reason: ${task.reason})` : '')}>
+                                {task.description} {!isCompletedList && task.reason && <span className="italic">(Reason: {task.reason})</span>}
+                            </p>
+                        )}
+                    </div>
+                    <div className="flex flex-col sm:flex-row items-center gap-1 mt-0.5 shrink-0">
+                        <Badge variant={task.category === 'goal' ? 'default' : 'secondary'} className={cn("capitalize text-xs shrink-0 h-5 px-1.5", isCompletedList && "opacity-60")}>
+                            {task.category}
+                        </Badge>
+                         {!isCompletedList && ( // Only show edit button for pending tasks
+                            <TooltipProvider delayDuration={100}>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => handleEdit(task)}>
+                                            <span className="sr-only">Edit Task</span>
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                                <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
+                                                <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" />
+                                            </svg>
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Edit Task</TooltipContent>
+                                </Tooltip>
+                            </TooltipProvider>
+                        )}
+                        <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button variant="ghost" size="icon" className={cn("h-7 w-7 text-destructive hover:text-destructive shrink-0", isCompletedList && "opacity-70")} onClick={() => handleDelete(task.id, task.name)}>
+                                        <span className="sr-only">Delete Task</span>
+                                        <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Delete Task</TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
+                    </div>
+                </li>
+            ))}
+        </ul>
+    );
+};
 
 
   // --- Render ---
@@ -804,7 +987,7 @@ export function TaskManager() {
              <Sheet open={isChatOpen} onOpenChange={setIsChatOpen}>
                 <SheetTrigger asChild>
                    <Button variant="outline" size="sm" className="gap-1.5">
-                     <Sparkles className="w-4 h-4" />
+                     <img src="https://picsum.photos/32/32" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-4 h-4 rounded-full" />
                      Airi Assistant
                    </Button>
                 </SheetTrigger>
@@ -821,7 +1004,7 @@ export function TaskManager() {
                          {/* Welcome Message */}
                         {chatMessages.length === 0 && (
                           <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground italic justify-center">
-                            <Sparkles className="w-5 h-5 text-primary shrink-0" />
+                            <img src="https://picsum.photos/32/32" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-5 h-5 rounded-full" />
                             <span>What do you want? Don't waste my time...</span>
                           </div>
                         )}
@@ -833,7 +1016,7 @@ export function TaskManager() {
                               msg.role === 'user' ? 'justify-end' : 'justify-start'
                             )}
                           >
-                            {msg.role === 'airi' && <Sparkles className="w-5 h-5 text-primary shrink-0 mb-1" />}
+                            {msg.role === 'airi' && <img src="https://picsum.photos/32/32" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-5 h-5 rounded-full mb-1" />}
                             {msg.role === 'system' && (
                                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-destructive shrink-0 mb-1" viewBox="0 0 20 20" fill="currentColor">
                                 <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -872,7 +1055,7 @@ export function TaskManager() {
                         ))}
                          {isAiLoading && (
                            <div className="flex justify-start items-center gap-2 p-3">
-                              <Sparkles className="w-5 h-5 text-primary shrink-0 animate-pulse" />
+                              <img src="https://picsum.photos/32/32" alt="Airi Avatar Thinking" data-ai-hint="cute anime girl thinking" className="w-5 h-5 rounded-full animate-pulse" />
                               {/* Simple "Thinking..." text */}
                              <span className="text-sm text-muted-foreground italic">Airi is thinking...</span>
                               {/* Optional: Skeleton lines */}
@@ -961,7 +1144,7 @@ export function TaskManager() {
             {/* Add/Edit Task Dialog Trigger */}
             <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: new Date(), dueTime: '', category: 'goal'}); setIsEditDialogOpen(true); }}>
+                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: new Date(), dueTime: '', category: activeTab === 'goals' ? 'goal' : 'chore' }); setIsEditDialogOpen(true); }}>
                   <Plus className="w-4 h-4" />
                   Add Task
                 </Button>
@@ -1109,182 +1292,56 @@ export function TaskManager() {
           </div>
         </header>
 
-        {/* Task Lists */}
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6 overflow-hidden">
-          {/* Pending Tasks */}
-          <Card className="flex flex-col shadow-md">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Circle className="w-5 h-5 text-orange-500" /> Pending Tasks ({pendingTasks.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex-1 overflow-y-auto"> {/* Changed overflow-hidden to overflow-y-auto */}
-              {/* Removed ScrollArea as CardContent now handles scroll */}
-              {isLoadingTasks ? (
-                  <div className="space-y-3 p-1"> {/* Added padding */}
-                      <Skeleton className="h-14 w-full" />
-                      <Skeleton className="h-14 w-full" />
-                      <Skeleton className="h-14 w-full" />
-                  </div>
-              ) : pendingTasks.length === 0 ? (
-                <p className="text-center text-muted-foreground italic py-6">No pending tasks. Add one!</p>
-              ) : (
-                <ul className="space-y-3">
-                  {pendingTasks.map((task) => (
-                    <li
-                      key={task.id}
-                      className={cn(
-                          "flex items-start gap-3 p-3 border rounded-lg hover:bg-accent/50 transition-colors",
-                          task.priority === 1 && "border-l-4 border-l-destructive", // Highlight highest priority
-                          task.priority === 2 && "border-l-4 border-l-orange-500",
-                          task.priority === 3 && "border-l-4 border-l-yellow-500"
-                      )}
-                    >
-                      <Checkbox
-                        id={`task-${task.id}`}
-                        checked={task.completed}
-                        onCheckedChange={() => handleToggleComplete(task.id)}
-                        aria-label={`Mark task "${task.name}" as complete`}
-                        className="mt-1 shrink-0" // Align checkbox nicely
-                      />
-                      <div className="flex-1 overflow-hidden mr-2">
-                        <Label
-                          htmlFor={`task-${task.id}`}
-                          className={cn(
-                            "font-medium cursor-pointer block", // Removed truncate initially
-                            task.completed ? 'line-through text-muted-foreground' : ''
-                          )}
-                        >
-                           {/* Display Priority Badge if available */}
-                           {task.priority && (
-                              <Badge variant="secondary" className="mr-1.5 px-1 py-0 text-[10px]">
-                                P{task.priority}
-                              </Badge>
-                           )}
-                          {task.name}
-                        </Label>
-                         {/* Due Date and Time */}
-                         <p className="text-xs text-muted-foreground mt-0.5">
-                            Due: {task.dueDate && isValid(task.dueDate) ? format(task.dueDate, 'MMM d, yyyy, h:mm a') : 'Invalid Date'}
-                         </p>
-                         {/* Description and Reason (if available) */}
-                        {(task.description || task.reason) && (
-                            <p className="text-xs text-muted-foreground/80 mt-1 line-clamp-2" title={task.description + (task.reason ? ` (Reason: ${task.reason})` : '')}>
-                              {task.description} {task.reason && <span className="italic">(Reason: {task.reason})</span>}
-                            </p>
-                        )}
-                      </div>
-                      <div className="flex flex-col sm:flex-row items-center gap-1 mt-0.5 shrink-0">
-                         <Badge variant={task.category === 'goal' ? 'default' : 'secondary'} className="capitalize text-xs shrink-0 h-5 px-1.5">
-                           {task.category}
-                         </Badge>
-                        <TooltipProvider delayDuration={100}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => handleEdit(task)}>
-                                <span className="sr-only">Edit Task</span>
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                  <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
-                                  <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" />
-                                </svg>
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Edit Task</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <TooltipProvider delayDuration={100}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive shrink-0" onClick={() => handleDelete(task.id, task.name)}>
-                                <span className="sr-only">Delete Task</span>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Delete Task</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+        {/* Task Lists with Tabs */}
+         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'goals' | 'chores')} className="flex-1 flex flex-col overflow-hidden">
+             <TabsList className="grid w-full grid-cols-2 mb-4">
+                <TabsTrigger value="goals" className="gap-1.5">
+                    <Target className="w-4 h-4" />
+                    Goals ({pendingGoals.length})
+                </TabsTrigger>
+                <TabsTrigger value="chores" className="gap-1.5">
+                    <ListChecks className="w-4 h-4" />
+                    Chores ({pendingChores.length})
+                </TabsTrigger>
+            </TabsList>
 
-          {/* Completed Tasks */}
-          <Card className="flex flex-col shadow-md">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-green-600" /> Completed Tasks ({completedTasks.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex-1 overflow-y-auto"> {/* Changed overflow-hidden to overflow-y-auto */}
-               {/* Removed ScrollArea */}
-                {isLoadingTasks ? (
-                     <div className="space-y-3 p-1 opacity-70"> {/* Added padding */}
-                         <Skeleton className="h-12 w-full" />
-                         <Skeleton className="h-12 w-full" />
+            {/* Content for Goals Tab */}
+             <TabsContent value="goals" className="flex-1 flex flex-col overflow-hidden">
+                <Card className="flex-1 flex flex-col shadow-md">
+                    <CardContent className="flex-1 overflow-y-auto p-4">
+                        {renderTaskList(pendingGoals)}
+                    </CardContent>
+                </Card>
+            </TabsContent>
+
+            {/* Content for Chores Tab */}
+             <TabsContent value="chores" className="flex-1 flex flex-col overflow-hidden">
+                 <Card className="flex-1 flex flex-col shadow-md">
+                    <CardContent className="flex-1 overflow-y-auto p-4">
+                        {renderTaskList(pendingChores)}
+                    </CardContent>
+                 </Card>
+            </TabsContent>
+
+            {/* Completed Tasks Accordion (below tabs) */}
+            <Accordion type="single" collapsible className="mt-6 shrink-0">
+              <AccordionItem value="completed-tasks">
+                <AccordionTrigger>
+                  <div className="flex items-center gap-2 text-lg font-medium"> {/* Adjusted styling */}
+                     <CheckCircle className="w-5 h-5 text-green-600" /> Completed Tasks ({completedTasks.length})
+                   </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  {/* Ensure the content area is scrollable if needed */}
+                   <ScrollArea className="max-h-60"> {/* Example max height */}
+                     <div className="p-1"> {/* Add some padding */}
+                        {renderTaskList(completedTasks, true)}
                      </div>
-                ) : completedTasks.length === 0 ? (
-                  <p className="text-center text-muted-foreground italic py-6">No completed tasks yet.</p>
-                ) : (
-                  <ul className="space-y-3">
-                    {completedTasks.map((task) => (
-                      <li
-                        key={task.id}
-                        className="flex items-start gap-3 p-3 border border-dashed rounded-lg bg-secondary/30"
-                      >
-                        <Checkbox
-                          id={`task-${task.id}`}
-                          checked={task.completed}
-                          onCheckedChange={() => handleToggleComplete(task.id)}
-                          aria-label={`Mark task "${task.name}" as incomplete`}
-                          className="opacity-70 mt-1 shrink-0"
-                        />
-                        <div className="flex-1 overflow-hidden mr-2">
-                          <Label
-                            htmlFor={`task-${task.id}`}
-                            className={cn(
-                              "font-medium cursor-pointer block",
-                              'line-through text-muted-foreground/80'
-                            )}
-                          >
-                            {task.name}
-                          </Label>
-                           {/* Completed Date/Time */}
-                           <p className="text-xs text-muted-foreground/60 mt-0.5">
-                             Done: {task.dueDate && isValid(task.dueDate) ? format(task.dueDate, 'MMM d, h:mm a') : 'Invalid Date'} {/* Simplified format */}
-                           </p>
-                          {/* Description (Optional) */}
-                          {task.description && (
-                              <p className="text-xs text-muted-foreground/50 mt-1 line-clamp-1" title={task.description}>
-                                {task.description}
-                              </p>
-                          )}
-                        </div>
-                        <div className="flex flex-col sm:flex-row items-center gap-1 mt-0.5 shrink-0">
-                             <Badge variant={task.category === 'goal' ? 'default' : 'secondary'} className="capitalize text-xs opacity-60 shrink-0 h-5 px-1.5">
-                                 {task.category}
-                             </Badge>
-                             <TooltipProvider delayDuration={100}>
-                               <Tooltip>
-                                 <TooltipTrigger asChild>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive opacity-70 shrink-0" onClick={() => handleDelete(task.id, task.name)}>
-                                      <span className="sr-only">Delete Task</span>
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Delete Task</TooltipContent>
-                                </Tooltip>
-                             </TooltipProvider>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-            </CardContent>
-          </Card>
-        </div>
+                   </ScrollArea>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+        </Tabs>
       </div>
     </div>
   );
