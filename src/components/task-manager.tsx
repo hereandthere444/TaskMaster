@@ -202,14 +202,11 @@ export function TaskManager() {
            const availableVoices = window.speechSynthesis.getVoices();
            if (availableVoices.length > 0) {
                setVoices(availableVoices);
-               // Attempt to find a Japanese English voice (heuristic, likely won't work reliably)
-               // Or fallback to a standard English voice
-               let airiVoice = availableVoices.find(v => v.lang.startsWith('en') && (v.name.includes('Japanese') || v.name.includes('Female'))); // Checks for 'Japanese' or 'Female'
+               // Prioritize finding a female English voice
+               let airiVoice = availableVoices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female'));
+               // Fallback to any English voice if no female voice is found
                if (!airiVoice) {
-                   airiVoice = availableVoices.find(v => v.lang.startsWith('en') && v.name.includes('Female')); // Fallback to any female English voice
-               }
-               if (!airiVoice) {
-                   airiVoice = availableVoices.find(v => v.lang.startsWith('en')); // Fallback to any English voice
+                   airiVoice = availableVoices.find(v => v.lang.startsWith('en'));
                }
                setSelectedVoice(airiVoice || null);
                console.log("Selected TTS Voice:", airiVoice?.name, airiVoice?.lang);
@@ -395,8 +392,10 @@ export function TaskManager() {
         } else {
             console.warn("No suitable TTS voice found, using system default.");
         }
-        utterance.pitch = 1.1; // Slight adjustment for character
-        utterance.rate = 1;   // Normal speed
+        // Adjust pitch and rate slightly for potential character voice tuning
+        // These values are subjective and depend on the selected voice.
+        utterance.pitch = 1.1; // Example: Slightly higher pitch
+        utterance.rate = 1;   // Example: Normal speed
 
         utterance.onerror = (event) => {
             console.error("SpeechSynthesis Error:", event.error);
@@ -600,7 +599,7 @@ export function TaskManager() {
                 recognitionRef.current.abort(); // Stop recognition if component unmounts
             }
         };
-    }, [airiChatForm, toast]); // Add dependencies
+    }, [airiChatForm, toast, onSubmitAiriChat]); // Add onSubmitAiriChat as dependency
 
 
     const toggleListening = () => {
