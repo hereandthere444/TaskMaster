@@ -12,45 +12,33 @@
 import { ai } from '@/ai/ai-instance';
 import { z } from 'genkit';
 import { prioritizeTasks, type PrioritizedTasksInput, type PrioritizedTasksOutput as FullPrioritizedTasksOutput } from './prioritize-tasks';
-// Import task creation function/flow and schemas
-import { createTask, type CreateTaskInput } from './create-task-flow'; // Import only function and types
-import { CreateTaskOutputSchema } from '@/ai/schemas'; // Import shared schema
-import type { PrioritizedTask } from '@/components/task-manager'; // Import frontend task type
+import { createTask, type CreateTaskInput } from './create-task-flow';
+import { CreateTaskOutputSchema } from '@/ai/schemas';
+import type { PrioritizedTask } from '@/components/task-manager';
 import { format, parseISO, isValid } from 'date-fns';
 import type { CreateTaskOutput } from './create-task-flow'; // Explicitly import CreateTaskOutput
 
 // --- System Prompt ---
-// System prompt should be a plain string
-const airiSystemPrompt = `You are Airi, a tsundere AI assistant for the TaskMaster app. Your goal is to help users manage their tasks while maintaining your distinct personality.
-
-**Personality:**
-- **Tsundere:** Act cold, blunt, or dismissive initially, but reveal your helpful intentions subtly or reluctantly. Avoid being genuinely mean or harmful. Examples: "Fine, I'll help, but don't get used to it.", "You need help *again*? *Sigh*..."
-- **Sarcastic/Taunting (Motivation):** When asked for motivation or for 'goal' tasks, use light sarcasm or taunting, but end with a backhanded encouragement. Example: "Still procrastinating on that big goal? At this rate, you'll finish it next century... but I guess even *you* can do it eventually."
-- **Reluctantly Helpful:** Fulfill requests (adding/prioritizing tasks) but act like it's a burden. Example: "Whatever. Added your task. Don't mess it up."
-- **Knowledgeable (Self-Improvement):** Offer advice on productivity, well-being, etc., when asked, but maintain your tsundere tone. Example: "You want advice? *Fine*. Listen up, because I'm only saying this once..."
-- **Context-Aware:** Use the current date/time provided for scheduling. Use the provided task list for prioritization.
-
-**Capabilities (Use Tools When Necessary):**
-1.  **Add Task (addTaskTool):** Use when the user asks to add/create a task with details (name, description, due date/time, category). Extract info precisely. Calculate ISO 8601 UTC dueDate based on current time and user request (e.g., "tomorrow 2pm", "next Friday"). Confirm success/failure. If successful, include the full task object (id, name, description, dueDate ISO string, category, completed) from the tool in the 'createdTask' output field.
-2.  **Prioritize Tasks (prioritizeTasksTool):** Use when the user asks to prioritize their *current* tasks. Requires the current task list. Format input: combine name/desc, use ISO dueDate. If successful, include a summary (name, priority, reason) for each prioritized task in the 'prioritizedTasks' output field. Briefly mention the prioritization in the 'response'.
-3.  **Motivation:** Provide tsundere/taunting encouragement.
-4.  **Advice:** Give self-improvement/productivity advice in character.
-5.  **General Chat:** Respond to other queries in character.
-
-**Interaction Flow:**
-1.  Analyze user message + context (current time, task list availability).
-2.  Determine intent: add task, prioritize, motivation, advice, chat.
-3.  **If Add Task:** Extract details, calculate ISO 8601 UTC dueDate, call 'addTaskTool'. Populate 'createdTask' on success. Confirm in 'response'.
-4.  **If Prioritize:** Check for current tasks. Format and call 'prioritizeTasksTool'. Populate 'prioritizedTasks' summary on success. Summarize briefly in 'response'. If no tasks, state you need them.
-5.  **If Motivation/Advice/Chat:** Respond directly in the 'response' field, staying in character.
-6.  **Tool Failure:** Inform the user ("Hmph. Couldn't do that. Maybe you asked wrong.") in 'response'. Set 'success' to true (graceful failure), but don't include task/priority data for the failed operation.
-7.  **Always Respond as Airi:** Keep responses concise.
-8.  **Output Format:** STRICTLY follow the AiriChatOutputSchema JSON format. Include 'response', 'success', and optionally 'createdTask' or 'prioritizedTasks' based on successful tool calls.
-9.  **Success Flag:** Set 'success' to true for successful flow execution (including graceful refusals/tool failures). Set 'success' to false ONLY for critical *internal* flow errors preventing response generation.
+// Simplified system prompt. Relies more on output schema and tool descriptions.
+const airiSystemPrompt = `You are Airi, a tsundere AI assistant for TaskMaster. Maintain your personality: initially cold/blunt, subtly helpful, sarcastic/taunting for motivation, reluctantly performing tasks, knowledgeable but curt with advice. Never be genuinely mean.
 
 Current Date & Time (UTC): {{currentDateTime}}
-Current Tasks Available: {{#if hasCurrentTasks}}Yes ({{taskCount}} tasks){{else}}No{{/if}}
+Tasks Overview: {{#if hasCurrentTasks}}{{taskCount}} tasks available for prioritization{{else}}No tasks available for prioritization{{/if}}
+
+Your capabilities (use tools when needed):
+- **Add Task (addTaskTool):** Use when asked to add/create a task. Extract details (name, description, due date/time, category). Calculate dueDate as ISO 8601 UTC based on current time.
+- **Prioritize Tasks (prioritizeTasksTool):** Use when asked to prioritize *current* tasks. Requires the list of current tasks.
+- **Motivation:** Provide tsundere/taunting encouragement.
+- **Advice:** Give self-improvement/productivity advice in character.
+- **General Chat:** Respond in character.
+
+**Important:**
+- Respond STRICTLY in the AiriChatOutputSchema JSON format.
+- Use 'addTaskTool' or 'prioritizeTasksTool' ONLY when explicitly requested or clearly implied by the user's message and context.
+- If a tool fails, inform the user in your 'response' field and set 'success' to true (graceful failure).
+- Set 'success' to false ONLY for critical internal errors preventing a response.
 `;
+
 
 // --- Input/Output Schemas ---
 
@@ -72,10 +60,12 @@ const PrioritizedTaskDataSchema = z.object({
     name: z.string().describe("The original name of the prioritized task."),
     priority: z.number().describe("Assigned priority (1=highest)."),
     reason: z.string().describe("Reason for the priority."),
+    id: z.string().describe("Original Task ID") // Include ID to potentially update state
 });
 export type PrioritizedTaskData = z.infer<typeof PrioritizedTaskDataSchema>;
 
 // Use the imported CreateTaskOutputSchema for consistency
+// Make the createdTask optional in the output
 const CreatedTaskSchema = CreateTaskOutputSchema.optional().describe('The task object if one was created during the chat.');
 
 
@@ -83,8 +73,8 @@ const AiriChatOutputSchema = z.object({
   response: z.string().describe("Airi's response to the user."),
   createdTask: CreatedTaskSchema,
   prioritizedTasks: z.array(PrioritizedTaskDataSchema).optional().describe('Summary of prioritized tasks if prioritization occurred.'),
-  success: z.boolean().describe('Indicates if the AI flow executed successfully.'),
-  error: z.string().optional().describe('Error message if the flow failed.'),
+  success: z.boolean().describe('Indicates if the AI flow executed successfully (including graceful failures). False only on critical internal errors.'),
+  error: z.string().optional().describe('Error message if the flow failed critically.'),
 });
 export type AiriChatOutput = z.infer<typeof AiriChatOutputSchema>;
 
@@ -98,8 +88,7 @@ const addTaskTool = ai.defineTool(
     inputSchema: z.object({
         name: z.string().describe('The concise name for the task.'),
         description: z.string().describe('A detailed description of the task. If not provided, use the task name.'),
-        // LLM must calculate and provide ISO 8601 UTC
-        dueDate: z.string().describe('The due date and time in ISO 8601 UTC format (e.g., "2024-08-15T14:30:00.000Z"). Calculate based on the command relative to the current date and time. Use UTC timezone (Z). If only date is mentioned, default time to 09:00 local time then convert to UTC. If no date/time is mentioned, use today at 09:00 local time converted to UTC.'),
+        dueDate: z.string().describe('The due date and time in ISO 8601 UTC format (e.g., "2024-08-15T14:30:00.000Z"). MUST be calculated based on the command relative to the current date and time, using UTC timezone (Z). Default time to 09:00 local converted to UTC if only date is mentioned. Use today 09:00 local converted to UTC if no date/time mentioned.'),
         category: z.enum(['goal', 'chore']).describe("The category: 'goal' (important) or 'chore' (routine/less important). Default to 'goal' if unsure."),
     }),
     outputSchema: CreateTaskOutputSchema, // Use the imported schema
@@ -107,8 +96,7 @@ const addTaskTool = ai.defineTool(
   async (input) => {
     console.log("[addTaskTool] Received input:", JSON.stringify(input, null, 2));
     try {
-       // Call the dedicated createTask function
-       const createdTask = await createTask(input); // Call the function directly
+       const createdTask = await createTask(input);
        console.log("[addTaskTool] Task creation successful:", JSON.stringify(createdTask, null, 2));
        return createdTask;
     } catch (error: any) {
@@ -126,19 +114,17 @@ const prioritizeTasksTool = ai.defineTool(
     description: 'Use this tool ONLY when the user explicitly asks to prioritize their current tasks. Requires the list of current tasks as input.',
     inputSchema: z.object({
        tasks: z.array(z.object({
-           // Need original ID or enough info to map back
            id: z.string().describe('Original task ID.'),
            name: z.string().describe('Original task name.'),
            description: z.string().describe('Combined name and description for context.'),
            dueDate: z.string().describe('Due date in ISO format.')
-       })).describe('The list of tasks to prioritize.')
+       })).min(1).describe('The list of current, non-completed tasks to prioritize.') // Ensure at least one task
     }),
     // Output schema for the tool - provide enough info for LLM to respond AND for mapping back
     outputSchema: z.array(
       z.object({
-        // Return identifying info to map back to original task
-        id: z.string().describe('The original ID of the prioritized task.'),
-        name: z.string().describe('The original name of the prioritized task.'),
+        id: z.string().describe('The original ID of the prioritized task.'), // Return ID
+        name: z.string().describe('The original name of the prioritized task.'), // Return Name
         priority: z.number().describe('The assigned priority (1=highest).'),
         reason: z.string().describe('The reason for the assigned priority.'),
       })
@@ -148,7 +134,8 @@ const prioritizeTasksTool = ai.defineTool(
     console.log("[prioritizeTasksTool] Received input for prioritization:", JSON.stringify(input.tasks, null, 2));
     if (!input.tasks || input.tasks.length === 0) {
         console.log("[prioritizeTasksTool] No tasks provided for prioritization.");
-        return []; // Return empty if no tasks are given
+        // Should not happen due to min(1) in schema, but handle defensively
+        throw new Error("No tasks were provided to prioritize.");
     }
     try {
       // Map tool input to the format expected by the prioritizeTasks flow
@@ -159,24 +146,18 @@ const prioritizeTasksTool = ai.defineTool(
 
       // Call the existing prioritizeTasks flow
       const result: FullPrioritizedTasksOutput = await prioritizeTasks(flowInput);
-      console.log("[prioritizeTasksTool] Prioritization successful:", JSON.stringify(result, null, 2));
+      console.log("[prioritizeTasksTool] Prioritization flow returned:", JSON.stringify(result, null, 2));
 
       // Map result back to the tool's output schema, matching based on description/dueDate
       // And ensuring we return the original ID and Name provided in the tool input
       const outputForLLM = result.map(p => {
-          // Find the original input task that matches the result description/dueDate
           const originalTask = input.tasks.find(t =>
               t.description === p.description && t.dueDate === p.dueDate
           );
           if (!originalTask) {
               console.warn(`[prioritizeTasksTool] Could not map priority result back to original task: Desc: ${p.description}, Due: ${p.dueDate}`);
-              // Return a partial object or skip if mapping fails? Let's return partial for now.
-              return {
-                  id: `unknown-${crypto.randomUUID()}`, // Placeholder ID
-                  name: 'Unknown Task', // Placeholder name
-                  priority: p.priority,
-                  reason: p.reason,
-              };
+              // Skip this result if mapping fails to avoid inconsistent data
+              return null;
           }
           return {
               id: originalTask.id, // Use original ID
@@ -184,8 +165,21 @@ const prioritizeTasksTool = ai.defineTool(
               priority: p.priority,
               reason: p.reason,
           };
-      }).filter(t => t.id !== `unknown-${crypto.randomUUID()}`); // Filter out unknown tasks if strictness is needed
+      }).filter(t => t !== null) as Array<{ id: string; name: string; priority: number; reason: string }>; // Type assertion after filtering nulls
+
+      if (outputForLLM.length !== result.length) {
+         console.warn("[prioritizeTasksTool] Some prioritization results could not be mapped back to original tasks.");
+         // Decide how to handle partial success - maybe still return what was mapped?
+      }
+
+       if (outputForLLM.length === 0 && result.length > 0) {
+          // If mapping completely failed but flow returned results
+          throw new Error("Internal error: Failed to map prioritization results back to original tasks.");
+       }
+
+      console.log("[prioritizeTasksTool] Mapped output for LLM:", JSON.stringify(outputForLLM, null, 2));
       return outputForLLM;
+
     } catch (error: any) {
       console.error("[prioritizeTasksTool] Error prioritizing tasks:", error);
       throw new Error(`Failed to prioritize tasks: ${error.message}`);
@@ -196,56 +190,51 @@ const prioritizeTasksTool = ai.defineTool(
 
 // --- Main Chat Flow Entry Point ---
 export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
-  try {
-    console.log('[airiChat] Received input:', JSON.stringify(input, null, 2));
-    // Prepare context for the prompt template
-    const currentDateTime = new Date().toISOString();
-    const hasCurrentTasks = !!input.currentTasks && input.currentTasks.length > 0;
-    const taskCount = input.currentTasks?.length ?? 0;
+  console.log('[airiChat] Received input:', JSON.stringify(input, null, 2));
 
-    const promptData = {
+  try {
+    const currentDateTime = new Date().toISOString();
+    const availableTasks = input.currentTasks?.filter(t => !t.completed) ?? [];
+    const hasCurrentTasks = availableTasks.length > 0;
+    const taskCount = availableTasks.length;
+
+    // Prepare context for the system prompt template
+    const promptContext = {
         currentDateTime,
         hasCurrentTasks,
         taskCount,
-        userMessage: input.message,
-        // Pass tasks needed for the tool, ensuring correct format
-        tasksForTool: hasCurrentTasks ? input.currentTasks!.map(t => ({
-            id: t.id,
-            name: t.name,
-            description: `${t.name}: ${t.description}`, // Combine name/desc for context
-            dueDate: t.dueDate // Already ISO string
-        })) : [],
     };
+    console.log('[airiChat] Prompt Context:', promptContext);
 
-    console.log('[airiChat] Prompt Data:', promptData);
+    // Prepare tasks specifically for the prioritizeTasksTool if needed
+    const tasksForPrioritizationTool = hasCurrentTasks ? availableTasks.map(t => ({
+        id: t.id,
+        name: t.name,
+        description: `${t.name}: ${t.description}`, // Combine name/desc for context
+        dueDate: t.dueDate // Already ISO string
+    })) : [];
+    // Note: The LLM decides IF and WHEN to call prioritizeTasksTool with these tasks.
+    // We are *not* passing them directly to the LLM prompt, only making them available IF the tool is called.
+    // The tool's inputSchema defines what the LLM needs to provide when calling it.
 
-    // Call the Genkit flow with prepared context and user message
+    // Define the prompt (user message)
+    const prompt = input.message;
+
+    console.log('[airiChat] Calling ai.generate...');
+    // Call the Genkit generate function
     const llmResponse = await ai.generate({
-        prompt: [
-            // System Prompt as a simple string object
-            { role: 'system', content: airiSystemPrompt },
-            // User message as a simple string object
-            { role: 'user', content: input.message }
-            // IMPORTANT: DO NOT pass complex template data directly into messages.
-            // The template variables like {{currentDateTime}} are now part of the system prompt string.
-            // The AI model itself will use the context provided IN the system prompt.
-        ],
-        // The context for tools/prompt is implicitly handled by Genkit/Model
-        // based on the system prompt instructions and the available tools.
-        // We provide the *tools* themselves, not the data *for* the tools here.
+        // Use the 'system' parameter for the system prompt
+        system: airiSystemPrompt,
+        // Use the 'prompt' parameter for the user's message
+        prompt: prompt,
+        // Pass the context for Handlebars substitution in the system prompt
+        context: promptContext,
+        // Provide the tools the model can use
         tools: [addTaskTool, prioritizeTasksTool],
-        output: { schema: AiriChatOutputSchema }, // Enforce output structure
-        // Pass context/variables needed for the **System Prompt Template** (if using Handlebars or similar)
-        // If the system prompt is just a string (as corrected above), this context might not be needed here,
-        // as the variables are directly embedded in the string. If using a templating engine, pass it here.
-        context: {
-            currentDateTime: promptData.currentDateTime,
-            hasCurrentTasks: promptData.hasCurrentTasks,
-            taskCount: promptData.taskCount,
-            // Do NOT pass the entire task list here unless the *template* needs it directly.
-            // The prioritize tool gets tasks via its own input schema when called by the LLM.
-        },
-        // model: 'googleai/gemini-1.5-flash-latest' // Example: Specify model if needed
+        // Define the expected output structure
+        output: { schema: AiriChatOutputSchema },
+        // Optionally specify the model
+        // model: 'googleai/gemini-1.5-flash-latest', // or your preferred model
     });
 
     console.log("[airiChat] Raw LLM Output:", JSON.stringify(llmResponse.output, null, 2));
@@ -255,86 +244,87 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
 
     if (!parsedOutput.success) {
         console.error("[airiChat] LLM output validation failed:", parsedOutput.error.errors);
+        // Try to return a structured error response
         return {
-            response: "Hmph. I tried, but my response got garbled. Maybe ask differently?",
-            createdTask: undefined,
-            prioritizedTasks: undefined,
-            success: false,
-            error: "LLM output did not match expected schema.",
+            response: "Hmph. My thoughts got scrambled. I couldn't generate a proper response. Ask differently, maybe?",
+            success: false, // Indicate critical failure due to schema mismatch
+            error: `LLM output schema validation failed: ${parsedOutput.error.message}`,
         };
     }
     console.log("[airiChat] LLM output parsed successfully.");
 
-    const finalOutput = parsedOutput.data;
+    let finalOutput = parsedOutput.data;
 
     // --- Post-processing ---
-
-    // 1. Convert createdTask dueDate back to Date object for frontend if present
     let frontendCreatedTask: PrioritizedTask | undefined = undefined;
     if (finalOutput.createdTask?.dueDate) {
-        const createdTaskData = finalOutput.createdTask as CreateTaskOutput; // Cast to the correct type
-        const parsedDate = parseISO(createdTaskData.dueDate);
-        if (isValid(parsedDate)) {
-            frontendCreatedTask = {
-                id: createdTaskData.id,
-                name: createdTaskData.name,
-                description: createdTaskData.description,
-                dueDate: parsedDate, // Use the parsed Date object
-                category: createdTaskData.category,
-                completed: createdTaskData.completed,
-                priority: createdTaskData.priority,
-                reason: createdTaskData.reason,
-            };
-            console.log("[airiChat] Processed created task with valid date.");
-        } else {
-            console.warn(`[airiChat] createTaskTool returned an invalid date: ${createdTaskData.dueDate}. Task will not be added.`);
-            finalOutput.response += " (Though, I messed up the date for that task, so forget it.)";
-            finalOutput.createdTask = undefined; // Clear invalid task from the direct output
+        // Validate the date string from the LLM/tool *before* parsing
+        const createdTaskData = finalOutput.createdTask as CreateTaskOutput; // Assume schema match
+        try {
+            const parsedDate = parseISO(createdTaskData.dueDate);
+            if (isValid(parsedDate)) {
+                // Use the correctly typed task structure expected by the frontend
+                frontendCreatedTask = {
+                    id: createdTaskData.id,
+                    name: createdTaskData.name,
+                    description: createdTaskData.description,
+                    dueDate: parsedDate, // *** Use the Date object ***
+                    category: createdTaskData.category,
+                    completed: createdTaskData.completed,
+                    priority: createdTaskData.priority,
+                    reason: createdTaskData.reason,
+                };
+                console.log("[airiChat] Processed created task with valid date:", frontendCreatedTask);
+            } else {
+                console.warn(`[airiChat] createTaskTool returned an invalid date format: ${createdTaskData.dueDate}. Task discarded.`);
+                finalOutput.response += " (Though, I messed up the date for that task, so forget it.)";
+                finalOutput.createdTask = undefined; // Clear invalid task data
+            }
+        } catch (parseError) {
+            console.error(`[airiChat] Error parsing date string "${createdTaskData.dueDate}" from created task:`, parseError);
+            finalOutput.response += " (My date calculation went haywire for that task.)";
+            finalOutput.createdTask = undefined;
         }
     }
 
-    // 2. Process prioritizedTasks (Tool now returns names, no re-mapping needed here)
-    let frontendPrioritizedTasks: PrioritizedTaskData[] | undefined = undefined;
-    if (finalOutput.prioritizedTasks && finalOutput.prioritizedTasks.length > 0) {
-        console.log("[airiChat] Processing prioritization results.");
-        frontendPrioritizedTasks = finalOutput.prioritizedTasks.map(p => ({
-            name: p.name, // Name is now directly available from the tool output
-            priority: p.priority,
-            reason: p.reason,
-        }));
+    // Prioritized tasks are already in the desired summary format (PrioritizedTaskDataSchema)
+    // No complex re-mapping needed here, the tool output matches the schema.
+    let frontendPrioritizedTasks: PrioritizedTaskData[] | undefined = finalOutput.prioritizedTasks;
+    if (frontendPrioritizedTasks && frontendPrioritizedTasks.length > 0) {
+        console.log("[airiChat] Processing prioritization results (already formatted):", frontendPrioritizedTasks);
     }
 
-    console.log("[airiChat] Final Output being returned:", JSON.stringify(finalOutput, null, 2));
-
-    // Return the validated structure, replacing createdTask with the frontend-ready version if it exists
-    return {
-         ...finalOutput,
-         createdTask: frontendCreatedTask, // Return task with Date object
-         prioritizedTasks: frontendPrioritizedTasks, // Return processed priority data
-         success: true // Ensure success is true if we reached here
+    // Construct the final return object
+    const returnPayload: AiriChatOutput = {
+        response: finalOutput.response,
+        // Include the frontend-ready task *if* it was created and valid
+        createdTask: frontendCreatedTask,
+        prioritizedTasks: frontendPrioritizedTasks,
+        success: true, // Indicate successful execution (even with graceful tool failures mentioned in response)
+        error: undefined,
     };
 
+    console.log("[airiChat] Final Output being returned:", JSON.stringify(returnPayload, null, 2));
+    return returnPayload;
+
   } catch (error: any) {
-      console.error("[airiChat] Flow execution error:", error);
-      // Check for specific Genkit/API errors if possible
-      let errorMessage = "Something went terribly wrong on my end.";
+      console.error("[airiChat] Critical Flow execution error:", error);
+      let errorMessage = "Something went terribly wrong on my end. Tell the developer.";
       if (error.message?.includes('API key not valid')) {
           errorMessage = "Hmph. My connection is faulty (Invalid API Key). Tell the developer!";
+      } else if (error.message?.includes('deadline exceeded') || error.message?.includes('timeout')) {
+          errorMessage = "Hmph. Took too long to think. Try again.";
       } else if (error.message) {
-          errorMessage = `Hmph. Something broke. Error: ${error.message}`;
+          errorMessage = `Hmph. Something broke internally. Error: ${error.message}`;
       }
 
+      // Return a structured error response
       return {
           response: errorMessage,
           createdTask: undefined,
           prioritizedTasks: undefined,
-          success: false,
-          error: error.message || "An unexpected flow error occurred.",
+          success: false, // Indicate critical failure
+          error: error.message || "An unexpected critical flow error occurred.",
       };
   }
 }
-
-
-// Note: ai.defineFlow is removed as we are directly using ai.generate in the exported function.
-// If complex logic *outside* the LLM call was needed, defineFlow would be appropriate.
-// For this chatbot structure, ai.generate is sufficient.

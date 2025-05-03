@@ -6,8 +6,7 @@
 
 // import type { Task } from '@/ai/flows/prioritize-tasks'; // No longer needed directly
 // import { prioritizeTasks } from '@/ai/flows/prioritize-tasks'; // No longer called directly
-// import { createTaskFromVoice } from '@/ai/flows/create-task-from-voice'; // Removed
-import { airiChat, type AiriChatInput, type AiriChatOutput } from '@/ai/flows/airi-chat-flow'; // Import the new chat flow
+import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData } from '@/ai/flows/airi-chat-flow'; // Import the new chat flow and types
 import { sendPersistentNotification } from '@/services/notification';
 import * as React from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -71,7 +70,7 @@ interface ChatMessage {
     text: string;
     timestamp: Date;
     // Optional: include task data if relevant to the message
-    taskData?: PrioritizedTask | { name: string; priority?: number; reason?: string }[];
+    taskData?: PrioritizedTask | PrioritizedTaskData[]; // Use specific type for prioritized data
     isError?: boolean; // Flag for error messages
 }
 
@@ -239,8 +238,18 @@ export function TaskManager() {
                   dueDate: parsedDate,
                   category: task.category || 'goal', // Default category
                   completed: !!task.completed, // Ensure boolean
+                  // Retain priority/reason if they exist
+                  priority: task.priority,
+                  reason: task.reason,
               };
-          }).sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()); // Sort after loading
+          }).sort((a, b) => { // Sort after loading, considering priority first
+             const priorityA = a.priority ?? Infinity;
+             const priorityB = b.priority ?? Infinity;
+             if (priorityA !== priorityB) return priorityA - priorityB;
+             const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
+             const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
+             return dateA - dateB;
+          });
           setTasks(parsedTasks);
           console.log("Tasks loaded from localStorage:", parsedTasks.length);
       } else {
@@ -278,11 +287,11 @@ export function TaskManager() {
   }, [tasks, isLoadingTasks, toast]);
 
   React.useEffect(() => {
-    // Force mode logic
+    // Force mode logic (updated for clarity)
     if (forceMode) {
       notificationIntervalRef.current = setInterval(() => {
         const incompleteGoals = tasks.filter(task => task.category === 'goal' && !task.completed);
-        const incompleteChores = tasks.filter(task => task.category === 'chore' && !task.completed);
+        // const incompleteChores = tasks.filter(task => task.category === 'chore' && !task.completed); // Chores no longer trigger taunts
 
         if (incompleteGoals.length > 0) {
           const randomGoal = incompleteGoals[Math.floor(Math.random() * incompleteGoals.length)];
@@ -294,16 +303,9 @@ export function TaskManager() {
             description: message,
             variant: 'destructive',
           });
-        } else if (incompleteChores.length > 0) {
-             // Send simple reminder for chores if no goals are pending
-             const randomChore = incompleteChores[Math.floor(Math.random() * incompleteChores.length)];
-             const message = `🔔 Reminder: Don't forget the chore: "${randomChore.name}" (Due: ${format(randomChore.dueDate, 'Pp')})`;
-             sendPersistentNotification(message);
-             toast({
-               title: '🔔 Chore Reminder',
-               description: message,
-             });
         }
+        // Optionally add simple reminders for chores here if needed, but separate from taunts
+        // else if (incompleteChores.length > 0) { ... }
       }, 60000); // Every 60 seconds
       toast({ title: '⚡ Force Mode Activated!', description: 'Persistent goal reminders are ON.' });
     } else {
@@ -378,7 +380,7 @@ export function TaskManager() {
           };
 
           const airiOutput: AiriChatOutput = await airiChat(airiInput);
-          console.log("[TaskManager] Received from Airi:", airiOutput);
+          console.log("[TaskManager] Received from Airi:", JSON.stringify(airiOutput, null, 2));
 
           // Default message structure
            let newAiriMessage: ChatMessage = {
@@ -391,10 +393,10 @@ export function TaskManager() {
 
            // Handle specific errors reported by the flow
            if (!airiOutput.success && airiOutput.error) {
-               console.error("[TaskManager] Airi flow returned an error:", airiOutput.error);
-               newAiriMessage.text = `Hmph. ${airiOutput.error} Try again, maybe?`; // Use error in response
+               console.error("[TaskManager] Airi flow returned a critical error:", airiOutput.error);
+               newAiriMessage.text = airiOutput.response || `Hmph. Critical error: ${airiOutput.error}`; // Use error response if available
                toast({
-                   title: 'Airi Error',
+                   title: 'Airi Critical Error',
                    description: airiOutput.error,
                    variant: 'destructive',
                });
@@ -403,18 +405,28 @@ export function TaskManager() {
            else if (airiOutput.success) {
                 // Handle created task
                 if (airiOutput.createdTask) {
-                    const newTask = airiOutput.createdTask; // Type should be PrioritizedTask
-                     // Basic validation
+                    // IMPORTANT: airiChat now returns a PrioritizedTask with a Date object
+                    const newTask: PrioritizedTask = airiOutput.createdTask;
+
+                     // Basic validation (ID, Name, valid Date object)
                      if (newTask.id && newTask.name && newTask.dueDate && isValid(newTask.dueDate)) {
-                         setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()));
-                         newAiriMessage.taskData = newTask;
+                         setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => {
+                             const prioA = a.priority ?? Infinity;
+                             const prioB = b.priority ?? Infinity;
+                             if (prioA !== prioB) return prioA - prioB;
+                             return a.dueDate.getTime() - b.dueDate.getTime();
+                         }));
+                         newAiriMessage.taskData = newTask; // Attach the full task data to the message
                          toast({
                              title: `✅ Airi added task: ${newTask.name}`,
                              description: `Due: ${format(newTask.dueDate, 'Pp')}`,
                          });
                      } else {
-                         console.warn("[TaskManager] Airi returned an invalid task structure:", newTask);
-                         newAiriMessage.text += " (But I couldn't add the task, the details were wrong.)";
+                         console.warn("[TaskManager] Airi returned an invalid task structure or date:", newTask);
+                         // Add a note to Airi's response if it doesn't already mention the failure
+                         if (!newAiriMessage.text.includes("couldn't add the task") && !newAiriMessage.text.includes("messed up")) {
+                           newAiriMessage.text += " (But I couldn't add the task, the details were wrong or the date was invalid.)";
+                         }
                          toast({
                             title: 'Task Creation Issue',
                             description: 'Airi tried to add a task, but the details were incomplete or invalid.',
@@ -425,16 +437,21 @@ export function TaskManager() {
 
                 // Handle prioritized tasks
                 if (airiOutput.prioritizedTasks && airiOutput.prioritizedTasks.length > 0) {
-                     const priorityMap = new Map(airiOutput.prioritizedTasks.map(p => [p.name, p]));
-                     let tasksUpdated = 0;
+                     // airiOutput.prioritizedTasks is already PrioritizedTaskData[]
+                     const priorityUpdates = airiOutput.prioritizedTasks;
+                     const priorityMap = new Map(priorityUpdates.map(p => [p.id, p])); // Use ID as key
+                     let tasksUpdatedCount = 0;
+
                      const updatedTasks = tasks.map(task => {
-                         const priorityData = priorityMap.get(task.name);
+                         const priorityData = priorityMap.get(task.id);
+                         // Update only if priority data exists AND task is not completed
                          if (priorityData && !task.completed) {
-                             tasksUpdated++;
+                             tasksUpdatedCount++;
                              return { ...task, priority: priorityData.priority, reason: priorityData.reason };
                          }
-                         return task; // Keep existing priority/reason if not in the new list or if completed
-                     }).sort((a, b) => {
+                         // Return unchanged task if no update or if completed
+                         return task;
+                     }).sort((a, b) => { // Re-sort based on new priorities
                          const priorityA = a.priority ?? Infinity;
                          const priorityB = b.priority ?? Infinity;
                          if (priorityA !== priorityB) return priorityA - priorityB;
@@ -443,16 +460,19 @@ export function TaskManager() {
                          return dateA - dateB;
                      });
 
-                     if (tasksUpdated > 0) {
+                     if (tasksUpdatedCount > 0) {
                          setTasks(updatedTasks);
-                         newAiriMessage.taskData = airiOutput.prioritizedTasks;
+                         newAiriMessage.taskData = priorityUpdates; // Attach the priority data array
                          toast({
                              title: '✨ Airi prioritized your tasks!',
-                             description: `Updated priorities for ${tasksUpdated} task(s).`,
+                             description: `Updated priorities for ${tasksUpdatedCount} task(s).`,
                          });
                      } else {
-                         console.warn("[TaskManager] Airi returned prioritization data, but no matching incomplete tasks found.");
-                         // Optionally inform the user in chat if desired
+                         console.warn("[TaskManager] Airi returned prioritization data, but no matching incomplete tasks were found or updated.");
+                         // Optionally add to Airi's response if desired
+                          // if (!newAiriMessage.text.includes("prioritize")) {
+                          //    newAiriMessage.text += " (I looked at the priorities, but nothing needed changing.)";
+                          // }
                      }
                  }
            }
@@ -465,7 +485,7 @@ export function TaskManager() {
           const errorResponseMessage: ChatMessage = {
               id: crypto.randomUUID(),
               sender: 'airi',
-              text: "Hmph. Something went seriously wrong trying to reach me. Check your connection or try again later.",
+              text: "Hmph. Something went seriously wrong trying to reach me. Check the console or try again later.",
               timestamp: new Date(),
               isError: true,
           };
@@ -496,7 +516,12 @@ export function TaskManager() {
       name: data.name, description: data.description, dueDate: finalDueDate,
       category: data.category, completed: false,
     };
-    setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()));
+    setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => { // Sort on add
+       const prioA = a.priority ?? Infinity;
+       const prioB = b.priority ?? Infinity;
+       if (prioA !== prioB) return prioA - prioB;
+       return a.dueDate.getTime() - b.dueDate.getTime();
+    }));
     form.reset({ name: '', description: '', dueDate: undefined, category: 'goal' }); // Reset with undefined date
     toast({ title: "Task Added", description: `"${data.name}" added. Due: ${format(finalDueDate, 'Pp')}` });
   }
