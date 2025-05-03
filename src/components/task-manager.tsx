@@ -1349,13 +1349,13 @@ export function TaskManager() {
         <div className="flex-1 flex flex-col gap-6 overflow-hidden"> {/* Use flex-col and gap */}
 
             {/* Goals Section */}
-            <div className="flex flex-col overflow-hidden"> {/* Section for Goals */}
+            <div className="flex flex-col"> {/* Section for Goals - Removed overflow-hidden */}
                 <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
                     <Target className="w-5 h-5" /> Goals ({pendingGoals.length})
                 </h2>
-                <Card className="flex-1 flex flex-col shadow-md overflow-hidden">
+                <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Keep overflow-hidden here for Card */}
                     <CardContent className="flex-1 p-0">
-                        <ScrollArea className="h-full p-4">
+                        <ScrollArea className="h-full p-4"> {/* ScrollArea manages scrolling */}
                            {renderTaskList(pendingGoals)}
                         </ScrollArea>
                     </CardContent>
@@ -1363,13 +1363,13 @@ export function TaskManager() {
             </div>
 
             {/* Chores Section */}
-            <div className="flex flex-col overflow-hidden"> {/* Section for Chores */}
+            <div className="flex flex-col"> {/* Section for Chores - Removed overflow-hidden */}
                 <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
                     <ListChecks className="w-5 h-5" /> Chores ({pendingChores.length})
                 </h2>
-                 <Card className="flex-1 flex flex-col shadow-md overflow-hidden">
+                 <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Keep overflow-hidden here for Card */}
                     <CardContent className="flex-1 p-0">
-                        <ScrollArea className="h-full p-4">
+                        <ScrollArea className="h-full p-4"> {/* ScrollArea manages scrolling */}
                           {renderTaskList(pendingChores)}
                         </ScrollArea>
                     </CardContent>
