@@ -941,7 +941,7 @@ export function TaskManager() {
                 <li
                     key={task.id}
                     className={cn(
-                        "flex items-start gap-3 p-3 border rounded-lg transition-colors",
+                        "flex items-start gap-3 p-3 border rounded-lg transition-opacity duration-300 ease-in-out animate-in fade-in-0", // Added animation classes
                         isCompletedList
                             ? 'bg-secondary/30 border-dashed opacity-70' // Style for completed tasks
                             : cn(
@@ -951,6 +951,7 @@ export function TaskManager() {
                                 task.priority === 3 && "border-l-4 border-l-yellow-500"
                               )
                     )}
+                    style={{ animationDelay: `${Math.random() * 0.2}s` }} // Stagger animation slightly
                 >
                     <Checkbox
                         id={`task-${task.id}`}
@@ -1045,7 +1046,7 @@ export function TaskManager() {
       {/* Main Task Area */}
       <div className="flex-1 flex flex-col p-4 md:p-6 lg:p-8"> {/* Removed overflow-hidden */}
         {/* Header */}
-        <header className="flex items-center justify-between mb-6 border-b pb-4">
+        <header className="flex items-center justify-between mb-6 border-b pb-4 animate-in fade-in slide-in-from-top-4 duration-500"> {/* Header animation */}
           <h1 className="text-3xl font-bold text-primary flex items-center gap-2">
             <CheckCircle className="w-7 h-7" /> TaskMaster
           </h1>
@@ -1053,7 +1054,7 @@ export function TaskManager() {
              {/* Chatbot Trigger */}
              <Sheet open={isChatOpen} onOpenChange={setIsChatOpen}>
                 <SheetTrigger asChild>
-                   <Button variant="outline" size="sm" className="gap-1.5">
+                   <Button variant="outline" size="sm" className="gap-1.5 transition-transform hover:scale-105 active:scale-95"> {/* Button animation */}
                      <img src="https://picsum.photos/32/32?random=3" alt="Airi Avatar" data-ai-hint="cute anime girl side profile" className="w-4 h-4 rounded-full" />
                      Airi Assistant
                    </Button>
@@ -1070,7 +1071,7 @@ export function TaskManager() {
                       <div className="space-y-4">
                          {/* Welcome Message */}
                         {chatMessages.length === 0 && (
-                          <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground italic justify-center">
+                          <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground italic justify-center animate-in fade-in delay-150 duration-500"> {/* Welcome message animation */}
                             <img src="https://picsum.photos/32/32?random=2" alt="Airi Avatar" data-ai-hint="cute anime girl blush" className="w-5 h-5 rounded-full" />
                             <span>What do you want? Don't waste my time...</span>
                           </div>
@@ -1079,9 +1080,10 @@ export function TaskManager() {
                           <div
                             key={index}
                             className={cn(
-                              "flex items-end gap-2 text-sm",
-                              msg.role === 'user' ? 'justify-end' : 'justify-start'
+                              "flex items-end gap-2 text-sm animate-in fade-in slide-in-from-bottom-2 duration-300", // Chat message animation
+                              msg.role === 'user' ? 'justify-end slide-in-from-right-4' : 'justify-start slide-in-from-left-4' // Directional slide
                             )}
+                            style={{ animationDelay: `${index * 0.05}s` }} // Stagger message animation slightly
                           >
                             {msg.role === 'airi' && <img src="https://picsum.photos/32/32?random=3" alt="Airi Avatar" data-ai-hint="cute anime girl side profile" className="w-5 h-5 rounded-full mb-1" />}
                             {msg.role === 'system' && (
@@ -1121,15 +1123,9 @@ export function TaskManager() {
                           </div>
                         ))}
                          {isAiLoading && (
-                           <div className="flex justify-start items-center gap-2 p-3">
-                              <img src="https://picsum.photos/32/32?random=4" alt="Airi Avatar Thinking" data-ai-hint="cute anime girl thinking" className="w-5 h-5 rounded-full animate-pulse" />
-                              {/* Simple "Thinking..." text */}
+                           <div className="flex justify-start items-center gap-2 p-3 animate-pulse"> {/* Loading indicator animation */}
+                              <img src="https://picsum.photos/32/32?random=4" alt="Airi Avatar Thinking" data-ai-hint="cute anime girl thinking" className="w-5 h-5 rounded-full" />
                              <span className="text-sm text-muted-foreground italic">Airi is thinking...</span>
-                              {/* Optional: Skeleton lines */}
-                             {/* <div className="space-y-1">
-                                 <Skeleton className="h-3 w-24" />
-                                 <Skeleton className="h-3 w-16" />
-                             </div> */}
                            </div>
                          )}
                       </div>
@@ -1168,7 +1164,7 @@ export function TaskManager() {
                                          size="icon"
                                          onClick={toggleListening}
                                          disabled={isAiLoading}
-                                         className={cn("shrink-0", isListening && "text-destructive animate-pulse ring-2 ring-destructive/50 rounded-full")}
+                                         className={cn("shrink-0 transition-transform hover:scale-110 active:scale-90", isListening && "text-destructive animate-pulse ring-2 ring-destructive/50 rounded-full")}
                                        >
                                          {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />} {/* Ensure icon size consistency */}
                                          <span className="sr-only">{isListening ? 'Stop Listening' : 'Start Listening'}</span>
@@ -1188,7 +1184,7 @@ export function TaskManager() {
                                             variant="ghost"
                                             size="icon"
                                             onClick={() => setIsTTSEnabled(prev => !prev)}
-                                            className="shrink-0"
+                                            className="shrink-0 transition-transform hover:scale-110 active:scale-90"
                                         >
                                             {isTTSEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />} {/* Ensure icon size consistency */}
                                             <span className="sr-only">{isTTSEnabled ? 'Disable TTS' : 'Enable TTS'}</span>
@@ -1199,7 +1195,7 @@ export function TaskManager() {
                                     </TooltipContent>
                                 </Tooltip>
                             </TooltipProvider>
-                          <Button type="submit" size="icon" disabled={isAiLoading || isListening} className="shrink-0">
+                          <Button type="submit" size="icon" disabled={isAiLoading || isListening} className="shrink-0 transition-transform hover:scale-110 active:scale-90">
                             <Send className="h-4 w-4" /> {/* Ensure icon size consistency */}
                             <span className="sr-only">Send message</span>
                           </Button>
@@ -1211,11 +1207,12 @@ export function TaskManager() {
             {/* Add/Edit Task Dialog Trigger */}
             <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: null, dueTime: null, category: 'goal' }); setIsEditDialogOpen(true); }}> {/* Reset form with nulls */}
+                <Button size="sm" className="gap-1.5 transition-transform hover:scale-105 active:scale-95" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: null, dueTime: null, category: 'goal' }); setIsEditDialogOpen(true); }}> {/* Reset form with nulls */}
                   <Plus className="w-4 h-4" />
                   Add Task
                 </Button>
               </DialogTrigger>
+              {/* Dialog Content animation is handled by ShadCN */}
               <DialogContent className="sm:max-w-[480px]">
                 <DialogHeader>
                   <DialogTitle>{editingTask ? 'Edit Task' : 'Add New Task'}</DialogTitle>
@@ -1363,7 +1360,7 @@ export function TaskManager() {
 
         {/* Task Display Area - Combined Goals and Chores */}
         {/* Removed flex-1 and overflow-hidden to allow natural height */}
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-6 animate-in fade-in delay-150 duration-500"> {/* Container animation */}
 
             {/* Goals Section */}
             <div className="flex flex-col">
@@ -1400,6 +1397,7 @@ export function TaskManager() {
             {/* Completed Tasks Accordion (at the bottom) */}
             {/* Removed mt-auto, keep shrink-0 */}
             <Accordion type="single" collapsible className="shrink-0">
+              {/* Accordion animation is handled by ShadCN */}
               <AccordionItem value="completed-tasks">
                 <AccordionTrigger>
                   <div className="flex items-center gap-2 text-lg font-medium">
@@ -1421,4 +1419,3 @@ export function TaskManager() {
     </div>
   );
 }
-
