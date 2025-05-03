@@ -11,9 +11,11 @@
 import {ai} from '@/ai/ai-instance';
 import {z} from 'genkit';
 
+// Update TaskSchema to make dueDate optional/nullable
 const TaskSchema = z.object({
   description: z.string().describe('The description of the task.'),
-  dueDate: z.string().describe('The due date of the task in ISO format.'),
+  // Allow null or undefined for dueDate
+  dueDate: z.string().describe('The due date of the task in ISO format. Can be null.').optional().nullable(),
 });
 
 export type Task = z.infer<typeof TaskSchema>;
@@ -21,10 +23,11 @@ export type Task = z.infer<typeof TaskSchema>;
 const PrioritizedTasksInputSchema = z.array(TaskSchema).describe('A list of tasks to prioritize.');
 export type PrioritizedTasksInput = z.infer<typeof PrioritizedTasksInputSchema>;
 
+// Update Output schema to also allow optional/null dueDate for consistency
 const PrioritizedTasksOutputSchema = z.array(
   z.object({
     description: z.string().describe('The description of the task.'),
-    dueDate: z.string().describe('The due date of the task in ISO format.'),
+    dueDate: z.string().describe('The due date of the task in ISO format. Can be null.').optional().nullable(),
     priority: z.number().describe('The priority of the task (1 being highest).'),
     reason: z.string().describe('The reasoning behind the assigned priority.'),
   })
@@ -42,28 +45,33 @@ const prompt = ai.definePrompt({
       tasks: z.array(
         z.object({
           description: z.string().describe('The description of the task.'),
-          dueDate: z.string().describe('The due date of the task in ISO format.'),
+          // Allow optional/null dueDate in prompt input schema
+          dueDate: z.string().describe('The due date of the task in ISO format. Can be null.').optional().nullable(),
         })
       ),
+      // Keep currentDate as required for context
+      currentDate: z.string().describe('The current date in ISO format (YYYY-MM-DD).'),
     }),
   },
   output: {
+    // Ensure output schema matches the updated PrioritizedTasksOutputSchema
     schema: z.array(
       z.object({
         description: z.string().describe('The description of the task.'),
-        dueDate: z.string().describe('The due date of the task in ISO format.'),
+        dueDate: z.string().describe('The due date of the task in ISO format. Can be null.').optional().nullable(),
         priority: z.number().describe('The priority of the task (1 being highest).'),
         reason: z.string().describe('The reasoning behind the assigned priority.'),
       })
     ),
   },
-  prompt: `You are an AI assistant that prioritizes a list of tasks based on their descriptions and due dates.
+  // Update Handlebars template to handle optional due dates gracefully
+  prompt: `You are an AI assistant that prioritizes a list of tasks based on their descriptions and due dates. Tasks without due dates should generally be lower priority unless their description implies high importance or urgency.
 
-  Given the following tasks, please provide a priority (1 being the highest) and a brief reason for the priority.  The current date is {{currentDate}}.
+  Given the following tasks, please provide a priority (1 being the highest) and a brief reason for the priority. The current date is {{currentDate}}.
 
   Tasks:
   {{#each tasks}}
-  - Description: {{{description}}}, Due Date: {{{dueDate}}}
+  - Description: {{{description}}}{{#if dueDate}}, Due Date: {{{dueDate}}}{{else}}, Due Date: (None Specified){{/if}}
   {{/each}}
 
   Prioritized Tasks (JSON array):
@@ -81,6 +89,7 @@ const prioritizeTasksFlow = ai.defineFlow<
 async input => {
   const currentDate = new Date().toISOString().slice(0, 10);
   const {output} = await prompt({
+    // Pass tasks as received (might contain null dueDates)
     tasks: input,
     currentDate,
   });

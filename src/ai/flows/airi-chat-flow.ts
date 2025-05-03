@@ -34,8 +34,8 @@ Current Date & Time (UTC): {{currentDateTime}}
 Tasks Overview: {{#if hasCurrentTasks}}{{taskCount}} tasks available for prioritization{{else}}No tasks available for prioritization{{/if}}
 
 Your Capabilities (Use Tools When Necessary):
-1.  **Add Tasks (addTaskTool):** If asked to add a task with details (name, description, due date/time, category), use 'addTaskTool'. Extract info, calculate ISO 8601 UTC dueDate based on current time. Confirm success/failure in your response. Include created task details in 'createdTask' field on success.
-2.  **Prioritize Tasks (prioritizeTasksTool):** If asked to prioritize *current* tasks, use 'prioritizeTasksTool'. Requires current task list. Format input correctly. Include summary (name, priority, reason) in 'prioritizedTasks' field on success. Summarize briefly in 'response'. If no tasks provided, state that.
+1.  **Add Tasks (addTaskTool):** If asked to add a task with details (name, description, category, optionally due date/time), use 'addTaskTool'. Extract info. If due date/time mentioned, calculate ISO 8601 UTC based on current time. If no date/time, leave dueDate null. Confirm success/failure. Include created task details ('createdTask' field) on success.
+2.  **Prioritize Tasks (prioritizeTasksTool):** If asked to prioritize *current* tasks, use 'prioritizeTasksTool'. Requires current task list. Format input correctly. Include summary (name, priority, reason, id) in 'prioritizedTasks' field on success. Summarize briefly in 'response'. If no tasks provided, state that.
 3.  **Motivation:** Provide tsundere/taunting encouragement.
 4.  **Advice:** Give self-improvement/productivity advice in character when asked.
 5.  **General Chat:** Respond in character.
@@ -59,7 +59,8 @@ const AiriChatInputSchema = z.object({
     id: z.string(),
     name: z.string(),
     description: z.string(),
-    dueDate: z.string().describe('Task due date in ISO 8601 format.'), // Expect ISO string
+    // Expect ISO string or undefined/null for dueDate
+    dueDate: z.string().describe('Task due date in ISO 8601 format.').optional().nullable(),
     category: z.enum(['goal', 'chore']),
     completed: z.boolean(),
   })).optional().describe('The current list of tasks (optional, needed for prioritization).'),
@@ -77,7 +78,10 @@ export type PrioritizedTaskData = z.infer<typeof PrioritizedTaskDataSchema>;
 
 // Use the imported CreateTaskOutputSchema for consistency
 // Make the createdTask optional in the output
-const CreatedTaskSchema = CreateTaskOutputSchema.optional().describe('The task object if one was created during the chat.');
+// Ensure the schema allows dueDate to be optional/nullable
+const CreatedTaskSchema = CreateTaskOutputSchema.extend({
+    dueDate: CreateTaskOutputSchema.shape.dueDate.optional().nullable()
+}).optional().describe('The task object if one was created during the chat.');
 
 
 const AiriChatOutputSchema = z.object({
@@ -91,22 +95,24 @@ export type AiriChatOutput = z.infer<typeof AiriChatOutputSchema>;
 
 // --- Tools ---
 
-// Tool for creating a task
+// Tool for creating a task - dueDate is now optional
 const addTaskTool = ai.defineTool(
   {
     name: 'addTaskTool',
-    description: 'Use this tool ONLY when the user explicitly asks to add or create a new task and provides sufficient details (name, description, due date/time, category). Calculate the dueDate based on the user\'s request relative to the current date/time and format it as ISO 8601 UTC.',
+    description: 'Use this tool ONLY when the user explicitly asks to add or create a new task and provides sufficient details (name, description, category). If due date/time is mentioned, calculate the dueDate based on the user\'s request relative to the current date/time and format it as ISO 8601 UTC. If no due date/time is mentioned, leave dueDate as null.',
     inputSchema: z.object({
         name: z.string().describe('The concise name for the task.'),
         description: z.string().describe('A detailed description of the task. If not provided, use the task name.'),
-        dueDate: z.string().describe('The due date and time in ISO 8601 UTC format (e.g., "2024-08-15T14:30:00.000Z"). MUST be calculated based on the command relative to the current date and time, using UTC timezone (Z). Default time to 09:00 local converted to UTC if only date is mentioned. Use today 09:00 local converted to UTC if no date/time mentioned.'),
+        // Make dueDate optional and nullable in the input schema for the tool
+        dueDate: z.string().describe('The due date and time in ISO 8601 UTC format (e.g., "2024-08-15T14:30:00.000Z"). MUST be calculated based on the command relative to the current date and time if mentioned, using UTC timezone (Z). Leave null if not mentioned.').optional().nullable(),
         category: z.enum(['goal', 'chore']).describe("The category: 'goal' (important) or 'chore' (routine/less important). Default to 'goal' if unsure."),
     }),
-    outputSchema: CreateTaskOutputSchema, // Use the imported schema
+    outputSchema: CreateTaskOutputSchema, // Use the imported schema (which also allows optional/null dueDate)
   },
   async (input) => {
     console.log("[addTaskTool] Received input:", JSON.stringify(input, null, 2));
     try {
+       // Pass input directly, createTask function handles optional/null date
        const createdTask = await createTask(input);
        console.log("[addTaskTool] Task creation successful:", JSON.stringify(createdTask, null, 2));
        return createdTask;
@@ -118,7 +124,7 @@ const addTaskTool = ai.defineTool(
   }
 );
 
-// Tool for prioritizing tasks
+// Tool for prioritizing tasks - dueDate might be null
 const prioritizeTasksTool = ai.defineTool(
   {
     name: 'prioritizeTasksTool',
@@ -128,7 +134,8 @@ const prioritizeTasksTool = ai.defineTool(
            id: z.string().describe('Original task ID.'),
            name: z.string().describe('Original task name.'),
            description: z.string().describe('Combined name and description for context.'),
-           dueDate: z.string().describe('Due date in ISO format.')
+           // Allow optional/null dueDate for prioritization input
+           dueDate: z.string().describe('Due date in ISO format. Can be null.').optional().nullable()
        })).min(1).describe('The list of current, non-completed tasks to prioritize.') // Ensure at least one task
     }),
     // Output schema for the tool - provide enough info for LLM to respond AND for mapping back
@@ -152,7 +159,8 @@ const prioritizeTasksTool = ai.defineTool(
       // Map tool input to the format expected by the prioritizeTasks flow
       const flowInput: PrioritizedTasksInput = input.tasks.map(t => ({
           description: t.description, // Pass combined description
-          dueDate: t.dueDate
+          // Pass dueDate as is (string or null)
+          dueDate: t.dueDate ?? null // Ensure null if undefined
       }));
 
       // Call the existing prioritizeTasks flow
@@ -163,7 +171,8 @@ const prioritizeTasksTool = ai.defineTool(
       // And ensuring we return the original ID and Name provided in the tool input
       const outputForLLM = result.map(p => {
           const originalTask = input.tasks.find(t =>
-              t.description === p.description && t.dueDate === p.dueDate
+               // Handle null dueDate in comparison
+              t.description === p.description && (t.dueDate ?? null) === (p.dueDate ?? null)
           );
           if (!originalTask) {
               console.warn(`[prioritizeTasksTool] Could not map priority result back to original task: Desc: ${p.description}, Due: ${p.dueDate}`);
@@ -257,35 +266,43 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
 
     // --- Post-processing ---
     let frontendCreatedTask: PrioritizedTask | undefined = undefined;
-    if (finalOutput.createdTask?.dueDate) {
-        // Validate the date string from the LLM/tool *before* parsing
-        const createdTaskData = finalOutput.createdTask as CreateTaskOutput; // Assume schema match
-        try {
-            const parsedDate = parseISO(createdTaskData.dueDate);
-            if (isValid(parsedDate)) {
-                // Use the correctly typed task structure expected by the frontend
-                frontendCreatedTask = {
-                    id: createdTaskData.id,
-                    name: createdTaskData.name,
-                    description: createdTaskData.description,
-                    dueDate: parsedDate, // *** Use the Date object ***
-                    category: createdTaskData.category,
-                    completed: createdTaskData.completed,
-                    priority: createdTaskData.priority,
-                    reason: createdTaskData.reason,
-                };
-                console.log("[airiChat] Processed created task with valid date:", frontendCreatedTask);
-            } else {
-                console.warn(`[airiChat] createTaskTool returned an invalid date format: ${createdTaskData.dueDate}. Task discarded.`);
-                finalOutput.response += " (Though, I messed up the date for that task, so forget it.)";
-                finalOutput.createdTask = undefined; // Clear invalid task data
-            }
-        } catch (parseError) {
-            console.error(`[airiChat] Error parsing date string "${createdTaskData.dueDate}" from created task:`, parseError);
-            finalOutput.response += " (My date calculation went haywire for that task.)";
-            finalOutput.createdTask = undefined;
-        }
-    }
+     // Handle optional dueDate for created tasks
+     if (finalOutput.createdTask?.id && finalOutput.createdTask?.name) {
+         const createdTaskData = finalOutput.createdTask as CreateTaskOutput; // Assume schema match
+         let parsedDate: Date | null = null; // Initialize as null
+
+         if (createdTaskData.dueDate) { // Only parse if dueDate exists
+             try {
+                 parsedDate = parseISO(createdTaskData.dueDate);
+                 if (!isValid(parsedDate)) {
+                     console.warn(`[airiChat] createTaskTool returned an invalid date format: ${createdTaskData.dueDate}. Task's date discarded.`);
+                     finalOutput.response += " (Though, I messed up the date for that task, so forget it.)";
+                     parsedDate = null; // Set back to null if invalid
+                 }
+             } catch (parseError) {
+                 console.error(`[airiChat] Error parsing date string "${createdTaskData.dueDate}" from created task:`, parseError);
+                 finalOutput.response += " (My date calculation went haywire for that task.)";
+                 parsedDate = null; // Set back to null on error
+             }
+         }
+
+         // Use the correctly typed task structure expected by the frontend
+         frontendCreatedTask = {
+             id: createdTaskData.id,
+             name: createdTaskData.name,
+             description: createdTaskData.description || '',
+             dueDate: parsedDate, // *** Assign the Date object or null ***
+             category: createdTaskData.category || 'goal',
+             completed: createdTaskData.completed || false,
+             priority: createdTaskData.priority,
+             reason: createdTaskData.reason,
+         };
+         console.log("[airiChat] Processed created task:", frontendCreatedTask);
+
+         // Update finalOutput.createdTask to match the frontend structure (optional, depends if you reuse finalOutput later)
+         // finalOutput.createdTask = frontendCreatedTask; // Might cause type issues if not careful
+     }
+
 
     // Prioritized tasks are already in the desired summary format (PrioritizedTaskDataSchema)
     // No complex re-mapping needed here, the tool output matches the schema.
@@ -328,4 +345,3 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
       };
   }
 }
-

@@ -11,7 +11,8 @@ export const CreateTaskOutputSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string(),
-  dueDate: z.string().describe('The due date in ISO 8601 format.'), // Keep as string for flow output consistency
+  // Keep as string | null/undefined for flow output consistency, validation happens on frontend/tool
+  dueDate: z.string().describe('The due date in ISO 8601 format.').optional().nullable(),
   category: z.enum(['goal', 'chore']),
   completed: z.boolean(),
   priority: z.number().optional(),

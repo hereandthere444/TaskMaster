@@ -14,16 +14,18 @@ import { parseISO, isValid } from 'date-fns';
 import type { PrioritizedTask } from '@/components/task-manager'; // Assuming type is defined here
 import { CreateTaskOutputSchema } from '@/ai/schemas'; // Import shared schema
 
-// Input schema matches the details needed to create a task
+// Input schema matches the details needed to create a task - make dueDate optional
 const CreateTaskInputSchema = z.object({
   name: z.string().describe('The concise name of the task.'),
   description: z.string().describe('A detailed description of the task.'),
-  // Expect ISO 8601 format (YYYY-MM-DDTHH:mm:ss.sssZ) from the LLM tool input
+  // Expect ISO 8601 format (YYYY-MM-DDTHH:mm:ss.sssZ) from the LLM tool input, but make it optional
   dueDate: z
     .string()
     .describe(
-      'The due date and time in ISO 8601 UTC format (e.g., "2024-08-15T14:30:00.000Z").'
-    ),
+      'The due date and time in ISO 8601 UTC format (e.g., "2024-08-15T14:30:00.000Z"). Optional.'
+    )
+    .optional()
+    .nullable(), // Allow null as well
   category: z
     .enum(['goal', 'chore'])
     .describe("The category: 'goal' (important) or 'chore' (less important)."),
@@ -38,20 +40,26 @@ export type CreateTaskOutput = z.infer<typeof CreateTaskOutputSchema>;
 // This function is the main entry point for this flow.
 // It takes structured input and returns a structured task object.
 export async function createTask(input: CreateTaskInput): Promise<CreateTaskOutput> {
-  // Validate the dueDate string immediately
-  const parsedDate = parseISO(input.dueDate);
-  if (!isValid(parsedDate)) {
-    console.error(`[createTaskFlow] Invalid date format received: ${input.dueDate}`);
-    // Handle invalid date - perhaps throw an error or return a specific error structure?
-    // For now, let's throw, as the tool/LLM should provide a valid date.
-    throw new Error(`Invalid date format provided: ${input.dueDate}. Expected ISO 8601 UTC.`);
+  let finalDueDateISO: string | null = null;
+
+  // Validate the dueDate string immediately if provided
+  if (input.dueDate) {
+      const parsedDate = parseISO(input.dueDate);
+      if (!isValid(parsedDate)) {
+        console.error(`[createTaskFlow] Invalid date format received: ${input.dueDate}`);
+        // Handle invalid date - perhaps throw an error or return a specific error structure?
+        // For now, let's throw, as the tool/LLM should provide a valid date if it provides one.
+        throw new Error(`Invalid date format provided: ${input.dueDate}. Expected ISO 8601 UTC or null/undefined.`);
+      }
+      finalDueDateISO = parsedDate.toISOString(); // Use valid ISO string
   }
+
 
   const newTask: CreateTaskOutput = {
     id: crypto.randomUUID(),
     name: input.name,
     description: input.description,
-    dueDate: parsedDate.toISOString(), // Ensure consistent ISO string format
+    dueDate: finalDueDateISO, // Assign the ISO string or null
     category: input.category,
     completed: false,
     // priority and reason are usually added later by the prioritization flow

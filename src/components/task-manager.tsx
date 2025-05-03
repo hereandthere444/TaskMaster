@@ -5,7 +5,7 @@
 'use client';
 
 import * as React from 'react';
-import { format, isValid, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { format, isValid, parseISO, startOfDay, endOfDay, parse as dateParse } from 'date-fns'; // Added dateParse
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -100,12 +100,12 @@ import { Skeleton } from './ui/skeleton';
 import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData as AiriPrioritizedTaskData } from '@/ai/flows/airi-chat-flow';
 import type { CreateTaskOutput as AiriCreatedTask } from '@/ai/schemas';
 
-// Define the structure of a task
+// Define the structure of a task - dueDate can be Date or null
 export interface PrioritizedTask {
   id: string;
   name: string;
   description: string;
-  dueDate: Date;
+  dueDate: Date | null; // Allow null for no due date
   category: 'goal' | 'chore';
   completed: boolean;
   priority?: number;
@@ -114,15 +114,25 @@ export interface PrioritizedTask {
 
 // --- Form Schemas ---
 
-// Schema for adding/editing tasks
+// Schema for adding/editing tasks - make dueDate and dueTime optional
 const taskFormSchema = z.object({
   name: z.string().min(1, { message: 'Task name is required.' }),
   description: z.string().optional(),
-  dueDate: z.date({ required_error: 'A due date is required.' }),
-  // Time format including AM/PM
+  dueDate: z.date().optional(), // Make date optional
+  // Time format including AM/PM - keep regex, but field is optional
   dueTime: z.string().regex(/^(0?[1-9]|1[0-2]):([0-5]\d) (AM|PM)$/i, { message: 'Invalid time (HH:MM AM/PM).' }).optional(),
   category: z.enum(['goal', 'chore']),
+}).refine(data => {
+    // If dueTime is provided, dueDate must also be provided
+    if (data.dueTime && !data.dueDate) {
+        return false;
+    }
+    return true;
+}, {
+    message: "Cannot set a time without a date.",
+    path: ["dueTime"], // Attach error to dueTime field
 });
+
 
 type TaskFormData = z.infer<typeof taskFormSchema>;
 
@@ -167,14 +177,25 @@ export function TaskManager() {
       const savedTasks = localStorage.getItem('tasks');
       if (savedTasks) {
         const parsedTasks: PrioritizedTask[] = JSON.parse(savedTasks).map(
-          (task: any) => ({
-            ...task,
-            name: task.name || task.description || 'Unnamed Task', // Ensure name exists
-            dueDate: task.dueDate ? parseISO(task.dueDate) : new Date(), // Parse ISO string to Date
-            category: task.category || 'goal', // Default category
-            completed: task.completed || false, // Default completion
-          })
-        ).filter(task => isValid(task.dueDate)); // Filter out tasks with invalid dates
+          (task: any) => {
+             // Handle potentially null dueDate from storage
+            let parsedDate: Date | null = null;
+            if (task.dueDate) {
+                parsedDate = parseISO(task.dueDate);
+                if (!isValid(parsedDate)) {
+                    console.warn(`Invalid stored dueDate "${task.dueDate}" for task "${task.name}". Setting to null.`);
+                    parsedDate = null; // Set to null if invalid
+                }
+            }
+            return {
+                ...task,
+                name: task.name || task.description || 'Unnamed Task', // Ensure name exists
+                dueDate: parsedDate, // Store as Date or null
+                category: task.category || 'goal', // Default category
+                completed: task.completed || false, // Default completion
+            };
+          }
+        ).filter(task => task.dueDate === null || isValid(task.dueDate)); // Allow null or valid dates
         setTasks(parsedTasks);
       }
     } catch (error) {
@@ -324,8 +345,10 @@ export function TaskManager() {
 
   // --- Task Operations ---
 
-   // Function to combine date and time (Handles HH:MM AM/PM)
-   const combineDateTime = (date: Date, time?: string): Date => {
+   // Function to combine date and time (Handles HH:MM AM/PM) - Returns Date or null if date is missing
+   const combineDateTime = (date?: Date, time?: string): Date | null => {
+       if (!date) return null; // Return null if no date is provided
+
        const newDate = new Date(date);
        newDate.setSeconds(0, 0); // Reset seconds and milliseconds
 
@@ -343,16 +366,22 @@ export function TaskManager() {
                    newDate.setHours(hours, minutes);
                } else {
                    // Fallback if parsing somehow fails despite regex
-                   newDate.setHours(9, 0);
+                   newDate.setHours(9, 0); // Default to 9 AM on the given date
                }
            } else {
                // Fallback for invalid time format string (shouldn't happen with validation)
-               newDate.setHours(9, 0);
+                newDate.setHours(9, 0); // Default to 9 AM on the given date
            }
        } else {
-           // Default to 09:00 AM if no time is provided
-           newDate.setHours(9, 0);
+           // If date is provided but no time, just use the start of that day (or default time like 9 AM)
+           newDate.setHours(9, 0); // Default to 9 AM on the given date
        }
+
+       if (!isValid(newDate)) {
+            console.error("Resulting combined date/time is invalid:", newDate);
+            return date; // Fallback to just the date part if combination fails
+       }
+
        return newDate;
    };
 
@@ -360,17 +389,29 @@ export function TaskManager() {
   // Handle task form submission (add or edit)
   const onSubmitTask = (data: TaskFormData) => {
     setIsSubmittingTask(true);
-    const combinedDueDate = combineDateTime(data.dueDate, data.dueTime);
+    // Combine date and time only if a date is provided
+    const combinedDueDate = data.dueDate ? combineDateTime(data.dueDate, data.dueTime) : null;
 
-    if (!isValid(combinedDueDate)) {
-       toast({
-           title: "Invalid Date/Time",
-           description: "The selected date or time is invalid. Please check your input.",
-           variant: "destructive",
-       });
-       setIsSubmittingTask(false);
-       return;
-    }
+     // Validate only if a combined date was attempted and failed
+     if (data.dueDate && !combinedDueDate) {
+        toast({
+            title: "Invalid Time",
+            description: "The provided time format is invalid. Please use HH:MM AM/PM.",
+            variant: "destructive",
+        });
+        setIsSubmittingTask(false);
+        return;
+     }
+    if (data.dueDate && combinedDueDate && !isValid(combinedDueDate)) {
+        toast({
+            title: "Invalid Date/Time",
+            description: "The resulting due date or time is invalid.",
+            variant: "destructive",
+        });
+        setIsSubmittingTask(false);
+        return;
+     }
+
 
     try {
       if (editingTask) {
@@ -378,7 +419,7 @@ export function TaskManager() {
         setTasks(
           tasks.map((task) =>
             task.id === editingTask.id
-              ? { ...task, ...data, dueDate: combinedDueDate }
+              ? { ...task, ...data, dueDate: combinedDueDate } // Update with combined date or null
               : task
           )
         );
@@ -389,7 +430,7 @@ export function TaskManager() {
           id: crypto.randomUUID(), // Use modern browser API
           name: data.name,
           description: data.description || '',
-          dueDate: combinedDueDate,
+          dueDate: combinedDueDate, // Assign combined date or null
           category: data.category,
           completed: false,
           // Priority/reason might be added later by AI
@@ -415,12 +456,15 @@ export function TaskManager() {
   // Open edit dialog and populate form
   const handleEdit = (task: PrioritizedTask) => {
     setEditingTask(task);
+    // Handle potentially null dueDate
+    const validDueDate = task.dueDate && isValid(task.dueDate) ? task.dueDate : undefined;
+    const dueTimeValue = validDueDate ? format(validDueDate, 'hh:mm a') : '';
+
     taskForm.reset({
       name: task.name,
       description: task.description,
-      dueDate: isValid(task.dueDate) ? task.dueDate : new Date(), // Ensure valid date
-       // Format time to HH:MM AM/PM for the input
-      dueTime: isValid(task.dueDate) ? format(task.dueDate, 'hh:mm a') : '',
+      dueDate: validDueDate, // Set to undefined if null/invalid
+      dueTime: dueTimeValue, // Set to empty if no valid date
       category: task.category,
     });
     setIsEditDialogOpen(true);
@@ -509,7 +553,8 @@ export function TaskManager() {
             id: t.id,
             name: t.name,
             description: `${t.name}: ${t.description}`, // Combine name and description for better context
-            dueDate: isValid(t.dueDate) ? t.dueDate.toISOString() : new Date().toISOString(), // Send ISO string
+            // Send ISO string if dueDate exists and is valid, otherwise send undefined/null
+            dueDate: (t.dueDate && isValid(t.dueDate)) ? t.dueDate.toISOString() : undefined,
             category: t.category,
             completed: t.completed,
         })),
@@ -558,38 +603,45 @@ export function TaskManager() {
           // If the structure is different (e.g., `dueDate` is string instead of Date), mapping is needed.
           const createdTaskData = airiOutput.createdTask as PrioritizedTask | undefined;
 
-          if (createdTaskData && createdTaskData.id && createdTaskData.name && createdTaskData.dueDate) {
+          if (createdTaskData && createdTaskData.id && createdTaskData.name) { // Only ID and name are truly required now
               console.log("Airi reported task creation:", createdTaskData);
               // Ensure dueDate is valid before adding. The flow should handle parsing.
-              let finalDueDate = createdTaskData.dueDate;
-              if (typeof finalDueDate === 'string') {
-                  finalDueDate = parseISO(finalDueDate);
+              // Allow null dueDate
+              let finalDueDate: Date | null = null;
+              if (createdTaskData.dueDate) {
+                    if (typeof createdTaskData.dueDate === 'string') {
+                        finalDueDate = parseISO(createdTaskData.dueDate);
+                    } else if (createdTaskData.dueDate instanceof Date) {
+                        finalDueDate = createdTaskData.dueDate;
+                    }
+
+                    if (!finalDueDate || !isValid(finalDueDate)) {
+                        console.warn("Airi created a task with an invalid or unparseable date:", createdTaskData.dueDate, ". Setting dueDate to null.");
+                         finalDueDate = null; // Set to null if invalid
+                         toast({
+                             title: "Airi Task Date Error",
+                             description: "Airi tried to add a task, but messed up the date. It's been added without one.",
+                             variant: "destructive",
+                         });
+                     }
               }
 
-              if (finalDueDate && isValid(finalDueDate)) {
-                  const newTask: PrioritizedTask = {
-                      id: createdTaskData.id,
-                      name: createdTaskData.name,
-                      description: createdTaskData.description || '',
-                      dueDate: finalDueDate, // Use the validated Date object
-                      category: createdTaskData.category || 'goal',
-                      completed: createdTaskData.completed || false,
-                      priority: createdTaskData.priority,
-                      reason: createdTaskData.reason,
-                  };
-                  setTasks((prevTasks) => [newTask, ...prevTasks]);
-                  toast({
-                      title: "Airi Added a Task",
-                      description: `"${newTask.name}" was created. It wasn't *that* hard.`,
-                  });
-              } else {
-                  console.warn("Airi created a task with an invalid or unparseable date:", createdTaskData.dueDate);
-                  toast({
-                      title: "Airi Task Error",
-                      description: "Airi tried to add a task, but messed up the date. Typical.",
-                      variant: "destructive",
-                  });
-              }
+              const newTask: PrioritizedTask = {
+                  id: createdTaskData.id,
+                  name: createdTaskData.name,
+                  description: createdTaskData.description || '',
+                  dueDate: finalDueDate, // Use the validated Date object or null
+                  category: createdTaskData.category || 'goal',
+                  completed: createdTaskData.completed || false,
+                  priority: createdTaskData.priority,
+                  reason: createdTaskData.reason,
+              };
+              setTasks((prevTasks) => [newTask, ...prevTasks]);
+              toast({
+                  title: "Airi Added a Task",
+                  description: `"${newTask.name}" was created. It wasn't *that* hard.`,
+              });
+
           } else {
                console.warn("Airi reported task creation, but data is incomplete or malformed:", createdTaskData);
           }
@@ -650,9 +702,16 @@ export function TaskManager() {
                         if (a.priority !== b.priority) return a.priority - b.priority;
                     } else if (a.priority !== undefined) return -1;
                     else if (b.priority !== undefined) return 1;
+
+                    // Sort tasks without due dates after tasks with due dates
                     const timeA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
                     const timeB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
-                    return timeA - timeB;
+
+                    if (timeA === Infinity && timeB !== Infinity) return 1; // a has no date, b has date
+                    if (timeA !== Infinity && timeB === Infinity) return -1; // a has date, b has no date
+                    if (timeA === Infinity && timeB === Infinity) return 0; // both have no date (keep original relative order or sort by name/id?)
+
+                    return timeA - timeB; // Sort by date if both have one
                 });
            });
       }
@@ -827,11 +886,22 @@ export function TaskManager() {
       } else if (b.priority !== undefined) {
         return 1; // Unprioritized tasks after prioritized
       }
-      // Then sort by due date (earlier first)
-      // Handle potentially invalid dates gracefully during sort
+
+      // Sort tasks without due dates after tasks with due dates
       const timeA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
       const timeB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
-      return timeA - timeB;
+
+      if (timeA === Infinity && timeB !== Infinity) return 1; // a has no date, b has date
+      if (timeA !== Infinity && timeB === Infinity) return -1; // a has date, b has no date
+      // If both have dates, sort normally (earlier first)
+      // If neither has a date, you might want secondary sorting (e.g., by name or creation date)
+      if (timeA === Infinity && timeB === Infinity) {
+         // Example: sort by name alphabetically if no date
+         return a.name.localeCompare(b.name);
+         // return 0; // Or keep original relative order
+      }
+
+      return timeA - timeB; // Sort by date if both have one
     });
   }, [tasks]);
 
@@ -901,12 +971,22 @@ export function TaskManager() {
                             )}
                             {task.name}
                         </Label>
-                        <p className={cn(
-                            "text-xs mt-0.5",
-                            task.completed ? "text-muted-foreground/60" : "text-muted-foreground"
-                         )}>
-                            Due: {task.dueDate && isValid(task.dueDate) ? format(task.dueDate, 'MMM d, yyyy, h:mm a') : 'Invalid Date'}
-                        </p>
+                        {/* Conditionally render due date */}
+                        {task.dueDate && isValid(task.dueDate) ? (
+                            <p className={cn(
+                                "text-xs mt-0.5",
+                                task.completed ? "text-muted-foreground/60" : "text-muted-foreground"
+                             )}>
+                                Due: {format(task.dueDate, 'MMM d, yyyy, h:mm a')}
+                            </p>
+                         ) : (
+                             <p className={cn(
+                                 "text-xs mt-0.5 italic",
+                                 task.completed ? "text-muted-foreground/50" : "text-muted-foreground/70"
+                              )}>
+                                 No due date
+                             </p>
+                         )}
                         {(task.description || task.reason) && (
                             <p className={cn(
                                 "text-xs mt-1 line-clamp-2",
@@ -970,7 +1050,7 @@ export function TaskManager() {
              <Sheet open={isChatOpen} onOpenChange={setIsChatOpen}>
                 <SheetTrigger asChild>
                    <Button variant="outline" size="sm" className="gap-1.5">
-                     <img src="https://picsum.photos/32/32?random=1" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-4 h-4 rounded-full" />
+                     <img src="https://picsum.photos/32/32?random=3" alt="Airi Avatar" data-ai-hint="cute anime girl side profile" className="w-4 h-4 rounded-full" />
                      Airi Assistant
                    </Button>
                 </SheetTrigger>
@@ -1064,7 +1144,7 @@ export function TaskManager() {
                               <FormItem className="flex-1">
                                 <FormControl>
                                   <Input
-                                    placeholder="Ask Airi something... (e.g., 'Add task: Buy milk tomorrow at 5 PM' or 'Prioritize my tasks')"
+                                    placeholder="Ask Airi something... (e.g., 'Add task: Buy milk' or 'Prioritize my tasks')"
                                     {...field}
                                     disabled={isAiLoading || isListening}
                                     autoComplete="off"
@@ -1127,7 +1207,7 @@ export function TaskManager() {
             {/* Add/Edit Task Dialog Trigger */}
             <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: new Date(), dueTime: '', category: 'goal' }); setIsEditDialogOpen(true); }}> {/* Default category to 'goal' */}
+                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: undefined, dueTime: '', category: 'goal' }); setIsEditDialogOpen(true); }}> {/* Default category to 'goal' */}
                   <Plus className="w-4 h-4" />
                   Add Task
                 </Button>
@@ -1171,7 +1251,7 @@ export function TaskManager() {
                     />
                     {/* Due Date & Time Combined Input */}
                      <div className="flex flex-col gap-2">
-                       <FormLabel>Due Date & Time</FormLabel>
+                       <FormLabel>Due Date & Time (Optional)</FormLabel>
                          <div className="flex flex-col sm:flex-row gap-2">
                              {/* Date Picker */}
                              <FormField
@@ -1191,7 +1271,7 @@ export function TaskManager() {
                                            )}
                                          >
                                            <CalendarIcon className="mr-2 h-4 w-4" />
-                                           {field.value && isValid(field.value) ? format(field.value, 'PPP') : <span>Pick a date</span>}
+                                           {field.value && isValid(field.value) ? format(field.value, 'PPP') : <span>Pick a date (Optional)</span>}
                                          </Button>
                                        </FormControl>
                                      </PopoverTrigger>
@@ -1200,7 +1280,8 @@ export function TaskManager() {
                                          mode="single"
                                          selected={field.value}
                                          onSelect={field.onChange}
-                                         disabled={(date) => date < startOfDay(new Date())} // Disable past dates
+                                         // No need to disable past dates if optional, or adjust logic if needed
+                                         // disabled={(date) => date < startOfDay(new Date())}
                                          initialFocus
                                        />
                                      </PopoverContent>
@@ -1221,9 +1302,11 @@ export function TaskManager() {
                                          <FormControl>
                                             {/* Use text input for HH:MM AM/PM */}
                                             <Input
-                                                placeholder="hh:mm AM/PM"
+                                                placeholder="hh:mm AM/PM (Optional)"
                                                 className="pl-10"
                                                 {...field}
+                                                // Disable time input if no date is selected
+                                                disabled={!taskForm.watch('dueDate')}
                                                 // Optional: Add pattern for direct validation, though regex in schema handles it
                                                 // pattern="(0?[1-9]|1[0-2]):[0-5]\d (AM|PM)"
                                              />
