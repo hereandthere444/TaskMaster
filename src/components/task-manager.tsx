@@ -572,33 +572,31 @@ export function TaskManager() {
       if (airiOutput.createdTask) {
           // Ensure createdTask has the expected structure before proceeding
           // Important: Use the correct type that includes 'id' etc.
-          const createdTaskData = airiOutput.createdTask as PrioritizedTask | undefined; // Assuming PrioritizedTask is the correct structure
-
+          // Cast to the correct type expected by the frontend state.
+          // This assumes the `createdTask` in the output matches the `PrioritizedTask` structure.
+          // If the structure is different (e.g., `dueDate` is string instead of Date), mapping is needed.
+          const createdTaskData = airiOutput.createdTask as PrioritizedTask | undefined;
 
           if (createdTaskData && createdTaskData.id && createdTaskData.name && createdTaskData.dueDate) {
               console.log("Airi reported task creation:", createdTaskData);
-              // Ensure dueDate is valid before adding
-              // The dueDate from createdTask might already be a Date object if mapped correctly, or an ISO string
-              let parsedDueDate: Date | null = null;
-              if (createdTaskData.dueDate instanceof Date && isValid(createdTaskData.dueDate)) {
-                  parsedDueDate = createdTaskData.dueDate;
-              } else if (typeof createdTaskData.dueDate === 'string') {
-                  parsedDueDate = parseISO(createdTaskData.dueDate);
+              // Ensure dueDate is valid before adding. The flow should handle parsing.
+              let finalDueDate = createdTaskData.dueDate;
+              if (typeof finalDueDate === 'string') {
+                  finalDueDate = parseISO(finalDueDate);
               }
 
-              if (parsedDueDate && isValid(parsedDueDate)) {
-                   // Ensure the created task has all required fields, providing defaults if necessary
+              if (finalDueDate && isValid(finalDueDate)) {
                   const newTask: PrioritizedTask = {
                       id: createdTaskData.id,
                       name: createdTaskData.name,
                       description: createdTaskData.description || '',
-                      dueDate: parsedDueDate, // Use the validated Date object
-                      category: createdTaskData.category || 'goal', // Default category if missing
-                      completed: createdTaskData.completed || false, // Default completed status
+                      dueDate: finalDueDate, // Use the validated Date object
+                      category: createdTaskData.category || 'goal',
+                      completed: createdTaskData.completed || false,
                       priority: createdTaskData.priority,
                       reason: createdTaskData.reason,
                   };
-                  setTasks((prevTasks) => [newTask, ...prevTasks]); // Add to the top
+                  setTasks((prevTasks) => [newTask, ...prevTasks]);
                   toast({
                       title: "Airi Added a Task",
                       description: `"${newTask.name}" was created. It wasn't *that* hard.`,
@@ -613,7 +611,6 @@ export function TaskManager() {
               }
           } else {
                console.warn("Airi reported task creation, but data is incomplete or malformed:", createdTaskData);
-               // Optionally inform the user, but might be confusing if AI mentioned adding a task
           }
       }
 
@@ -647,6 +644,8 @@ export function TaskManager() {
 
                // Add back tasks that were not in the prioritization result
                taskMap.forEach(task => {
+                    // Clear old priority/reason for tasks not returned by Airi this time? Optional.
+                    // updatedTasks.push({ ...task, priority: undefined, reason: undefined });
                    updatedTasks.push(task); // Keep existing priorities for non-updated tasks
                });
 
@@ -1306,19 +1305,23 @@ export function TaskManager() {
             </TabsList>
 
             {/* Content for Goals Tab */}
-             <TabsContent value="goals" className="flex-1 flex flex-col overflow-hidden">
+             <TabsContent value="goals" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0"> {/* Adjusted classes */}
                 <Card className="flex-1 flex flex-col shadow-md">
-                    <CardContent className="flex-1 overflow-y-auto p-4">
-                        {renderTaskList(pendingGoals)}
+                    <CardContent className="flex-1 p-0"> {/* Remove padding from CardContent */}
+                        <ScrollArea className="h-full p-4"> {/* Add ScrollArea here */}
+                           {renderTaskList(pendingGoals)}
+                        </ScrollArea>
                     </CardContent>
                 </Card>
             </TabsContent>
 
             {/* Content for Chores Tab */}
-             <TabsContent value="chores" className="flex-1 flex flex-col overflow-hidden">
+             <TabsContent value="chores" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0"> {/* Adjusted classes */}
                  <Card className="flex-1 flex flex-col shadow-md">
-                    <CardContent className="flex-1 overflow-y-auto p-4">
-                        {renderTaskList(pendingChores)}
+                    <CardContent className="flex-1 p-0"> {/* Remove padding from CardContent */}
+                        <ScrollArea className="h-full p-4"> {/* Add ScrollArea here */}
+                          {renderTaskList(pendingChores)}
+                        </ScrollArea>
                     </CardContent>
                  </Card>
             </TabsContent>
@@ -1346,3 +1349,4 @@ export function TaskManager() {
     </div>
   );
 }
+
