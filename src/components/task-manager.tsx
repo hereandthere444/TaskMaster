@@ -1,11 +1,12 @@
 /**
  * @fileoverview Task management component with AI chat integration (Airi).
  * Allows adding, viewing, completing, deleting tasks, and interacting with Airi.
+ * Includes notification reminders for tasks.
  */
 'use client';
 
 import * as React from 'react';
-import { format, isValid, parseISO, startOfDay, endOfDay, parse as dateParse } from 'date-fns'; // Added dateParse
+import { format, isValid, parseISO, startOfDay, endOfDay, parse as dateParse, differenceInMinutes } from 'date-fns'; // Added dateParse, differenceInMinutes
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -95,6 +96,7 @@ import {
   VolumeX,
   Target, // Icon for Goals
   ListChecks, // Icon for Chores
+  Bell, // Icon for notifications
 } from 'lucide-react';
 import { Skeleton } from './ui/skeleton';
 import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData as AiriPrioritizedTaskData } from '@/ai/flows/airi-chat-flow';
@@ -151,6 +153,26 @@ const SpeechRecognition =
   (typeof window !== 'undefined' && window.SpeechRecognition) ||
   (typeof window !== 'undefined' && (window as any).webkitSpeechRecognition);
 
+// --- Notification Messages ---
+const airiNotificationMessages = {
+    goal: [
+        "Hmph. That goal '{taskName}' is due. Don't tell me you forgot.",
+        "Oi! Your goal '{taskName}' needs attention. Stop slacking.",
+        "It's time for '{taskName}'. Did you really think I wouldn't remind you?",
+        "Hey, that important thing, '{taskName}'? It's due now. Get on it.",
+        "Don't make me repeat myself. Your goal '{taskName}' is waiting. Move it.",
+        "*Sigh*. Fine, I'll remind you. '{taskName}' is due. Try not to mess it up.",
+        "Are you even trying? '{taskName}' is due. Let's see if you can actually finish it.",
+    ],
+    chore: [
+        "Just a reminder for that chore, '{taskName}'. Don't ignore it.",
+        "Time for the chore '{taskName}'. Get it done.",
+        "Reminder: '{taskName}'.",
+        "'{taskName}' needs doing now.",
+        "Don't forget about '{taskName}'.",
+    ]
+};
+
 // --- TaskManager Component ---
 export function TaskManager() {
   const [tasks, setTasks] = React.useState<PrioritizedTask[]>([]);
@@ -165,11 +187,14 @@ export function TaskManager() {
   const [isTTSEnabled, setIsTTSEnabled] = React.useState(true);
   const [voices, setVoices] = React.useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = React.useState<SpeechSynthesisVoice | null>(null);
+  const [notificationPermission, setNotificationPermission] = React.useState<NotificationPermission>('default');
+  const [notifiedTaskIds, setNotifiedTaskIds] = React.useState<Set<string>>(new Set());
 
 
   const { toast } = useToast();
   const recognitionRef = React.useRef<any>(null); // Ref for SpeechRecognition instance
   const chatScrollAreaRef = React.useRef<HTMLDivElement>(null); // Ref for chat scroll area viewport
+  const notificationIntervalRef = React.useRef<NodeJS.Timeout | null>(null); // Ref for notification interval
 
   // --- Initialization and Data Loading ---
 
@@ -231,65 +256,45 @@ export function TaskManager() {
    // Load TTS Voices and Select Best Female English Voice
    React.useEffect(() => {
     const loadVoices = () => {
+        if (!('speechSynthesis' in window)) return; // Guard against SSR or unsupported browsers
         const availableVoices = window.speechSynthesis.getVoices();
         if (availableVoices.length > 0) {
             setVoices(availableVoices);
 
-            console.log("All Available Voices:", availableVoices.map(v => ({ name: v.name, lang: v.lang, default: v.default, quality: (v as any).quality || 'N/A' })));
+            console.log("All Available Voices:", availableVoices.map(v => ({ name: v.name, lang: v.lang, default: v.default })));
 
-            // --- Refined Voice Selection Logic ---
-            // 1. Filter for English voices, prioritizing US English but including others.
-            const englishVoices = availableVoices.filter(v => v.lang.startsWith('en'));
+            // --- Refined Voice Selection Logic for Female Japanese-English Accent Attempt ---
+            // 1. Prioritize known specific voices that might have the accent (Highly experimental)
+            // Examples: Check for voices with "Japanese" in the name but "en-" lang, or specific known voice names. This is very unreliable.
+            let bestVoice = availableVoices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('japanese'));
 
-            // 2. Filter for female voices within the English list.
-            const femaleEnglishVoices = englishVoices.filter(v =>
-                v.name.toLowerCase().includes('female') ||
-                v.name.toLowerCase().includes('woman') ||
-                // Some voices don't explicitly mention gender but are known female
-                v.name.match(/Samantha|Victoria|Karen|Tessa|Google UK English Female|Google US English|Zira|Natasha/i) // Added Zira/Natasha
-            );
-
-            // 3. Prioritize "Google" or higher quality voices if available.
-            let bestVoice = femaleEnglishVoices.find(v => v.name.startsWith('Google') && v.lang === 'en-US');
-             if (!bestVoice) {
-                 bestVoice = femaleEnglishVoices.find(v => v.name.startsWith('Google')); // Any Google female voice
-             }
-             // Add prioritization for known high-quality OS voices (examples)
-             if (!bestVoice) {
-                 bestVoice = femaleEnglishVoices.find(v => v.name.includes('Samantha') || v.name.includes('Victoria') || v.name.includes('Zira') || v.name.includes('Natasha')); // Example: macOS/Windows voices
-             }
-
-             // 4. Fallback: Any female English voice.
-             if (!bestVoice) {
-                 bestVoice = femaleEnglishVoices.find(v => v.lang === 'en-US'); // Prefer US Female
-             }
-             if (!bestVoice) {
-                 bestVoice = femaleEnglishVoices[0]; // Any Female English voice
-             }
-
-            // 5. Fallback: Any English voice.
+            // 2. Try finding a high-quality female English voice (often better than forcing an accent)
             if (!bestVoice) {
-                bestVoice = englishVoices.find(v => v.lang === 'en-US'); // Prefer US English
+                 const femaleEnglishVoices = availableVoices.filter(v =>
+                     v.lang.startsWith('en') &&
+                     (v.name.toLowerCase().includes('female') || v.name.match(/Samantha|Victoria|Karen|Tessa|Google UK English Female|Google US English|Zira|Natasha/i))
+                 );
+                bestVoice = femaleEnglishVoices.find(v => v.name.startsWith('Google') && v.lang === 'en-US');
+                if (!bestVoice) bestVoice = femaleEnglishVoices.find(v => v.name.startsWith('Google'));
+                if (!bestVoice) bestVoice = femaleEnglishVoices.find(v => v.name.includes('Samantha') || v.name.includes('Victoria') || v.name.includes('Zira') || v.name.includes('Natasha'));
+                if (!bestVoice) bestVoice = femaleEnglishVoices.find(v => v.lang === 'en-US');
+                if (!bestVoice) bestVoice = femaleEnglishVoices[0];
             }
+
+             // 3. Fallback: Any English voice
              if (!bestVoice) {
-                 bestVoice = englishVoices[0]; // Any English voice
+                 const englishVoices = availableVoices.filter(v => v.lang.startsWith('en'));
+                 bestVoice = englishVoices.find(v => v.lang === 'en-US');
+                 if (!bestVoice) bestVoice = englishVoices[0];
              }
 
-            // 6. Absolute Fallback: Browser/OS default (might not be female or English).
+            // 4. Absolute Fallback: Browser/OS default.
             if (!bestVoice) {
                  bestVoice = availableVoices.find(v => v.default);
             }
 
-            // Try to find a Japanese voice specifically for the accent attempt
-            const japaneseVoices = availableVoices.filter(v => v.lang.startsWith('ja') && v.name.toLowerCase().includes('female'));
-            const selectedJapaneseVoice = japaneseVoices.find(v => v.name.startsWith('Google')) || japaneseVoices[0]; // Prefer Google Japanese
-
-            // If a Japanese voice is found, use it, otherwise fallback to the best English voice
-            setSelectedVoice(selectedJapaneseVoice || bestVoice || null);
-            console.log("Selected TTS Voice:", selectedJapaneseVoice ? selectedJapaneseVoice.name : (bestVoice?.name || 'None found'), selectedJapaneseVoice ? selectedJapaneseVoice.lang : (bestVoice?.lang || 'N/A'));
-
-            // setSelectedVoice(bestVoice || null); // Use the best found voice or null
-            // console.log("Selected TTS Voice:", bestVoice?.name, bestVoice?.lang, `(Default: ${bestVoice?.default})`);
+            setSelectedVoice(bestVoice || null);
+            console.log("Selected TTS Voice:", bestVoice?.name || 'None found', bestVoice?.lang || 'N/A');
 
         } else {
             console.log("Waiting for voices to load...");
@@ -317,6 +322,148 @@ export function TaskManager() {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty dependency array ensures this runs once on mount
+
+   // --- Notification Setup ---
+   React.useEffect(() => {
+        if ('Notification' in window) {
+            setNotificationPermission(Notification.permission);
+        }
+   }, []);
+
+    const requestNotificationPermission = async () => {
+        if (!('Notification' in window)) {
+            toast({ title: "Notifications Not Supported", description: "Your browser doesn't support notifications.", variant: "destructive" });
+            return;
+        }
+
+        if (notificationPermission === 'granted') {
+            toast({ title: "Notifications Already Enabled", description: "You've already allowed notifications." });
+            return;
+        }
+
+        if (notificationPermission === 'denied') {
+            toast({ title: "Notifications Blocked", description: "Please enable notifications in your browser settings.", variant: "destructive" });
+            return;
+        }
+
+        try {
+            const permission = await Notification.requestPermission();
+            setNotificationPermission(permission);
+            if (permission === 'granted') {
+                toast({ title: "Notifications Enabled!", description: "Airi might start bothering you now..." });
+                // Immediately check for overdue tasks after permission granted
+                checkAndSendNotifications();
+            } else {
+                toast({ title: "Notifications Not Enabled", description: "Fine, be that way. No reminders for you.", variant: "destructive" });
+            }
+        } catch (error) {
+            console.error("Error requesting notification permission:", error);
+            toast({ title: "Notification Error", description: "Could not request notification permission.", variant: "destructive" });
+        }
+    };
+
+   // Function to send notifications
+   const sendAiriNotification = React.useCallback((task: PrioritizedTask) => {
+    if (notificationPermission !== 'granted' || notifiedTaskIds.has(task.id) || !task.dueDate) {
+        return; // Don't send if permission not granted, already notified, or no due date
+    }
+
+    const messages = airiNotificationMessages[task.category];
+    const randomMessageTemplate = messages[Math.floor(Math.random() * messages.length)];
+    const message = randomMessageTemplate.replace('{taskName}', task.name);
+
+    // Simple notification
+    const notification = new Notification("Airi Reminder", {
+        body: message,
+        icon: '/airi-icon.png', // Add an icon for Airi (ensure path is correct in /public)
+        tag: task.id, // Use task ID as tag to prevent duplicate notifications for the same task if check runs fast
+        renotify: false, // Don't renotify if tag exists
+    });
+
+    // Optional: Add click handler to focus window/tab or mark task done (more complex)
+    notification.onclick = () => {
+        window.focus(); // Bring window to front
+        // Optionally navigate to the task or mark as complete?
+        notification.close();
+    };
+
+    // Add task ID to notified set to prevent immediate re-notification
+    setNotifiedTaskIds(prev => new Set(prev).add(task.id));
+
+    // Optional: Remove from notified set after some time to allow re-notification if task is edited/still overdue later
+    // setTimeout(() => {
+    //     setNotifiedTaskIds(prev => {
+    //         const newSet = new Set(prev);
+    //         newSet.delete(task.id);
+    //         return newSet;
+    //     });
+    // }, 1000 * 60 * 5); // Remove after 5 minutes
+
+   }, [notificationPermission, notifiedTaskIds]);
+
+    // Function to check for due tasks
+    const checkAndSendNotifications = React.useCallback(() => {
+        if (notificationPermission !== 'granted') return;
+
+        const now = new Date();
+        console.log(`[${format(now, 'p')}] Checking for notifications...`);
+
+        tasks.forEach(task => {
+            // Check only pending tasks with a valid due date
+            if (!task.completed && task.dueDate && isValid(task.dueDate)) {
+                 // Check if the due time is within the next minute (or has just passed)
+                const minutesDifference = differenceInMinutes(task.dueDate, now);
+
+                // Notify if due within the next minute or up to 5 minutes overdue (adjust range as needed)
+                // And haven't notified for this task ID yet
+                if (minutesDifference >= -5 && minutesDifference <= 1 && !notifiedTaskIds.has(task.id)) {
+                    console.log(`Sending notification for task: ${task.name} (Due: ${format(task.dueDate, 'p')})`);
+                    sendAiriNotification(task);
+                }
+                 // Cleanup old notified tasks if they are now completed or far in the past
+                 else if ((task.completed || minutesDifference < -60) && notifiedTaskIds.has(task.id)) {
+                    console.log(`Cleaning up notified state for task: ${task.name}`);
+                    setNotifiedTaskIds(prev => {
+                       const newSet = new Set(prev);
+                       newSet.delete(task.id);
+                       return newSet;
+                     });
+                 }
+            } else if (task.dueDate === null && notifiedTaskIds.has(task.id)) {
+                 // Clean up notified state if due date was removed
+                 console.log(`Cleaning up notified state for task without due date: ${task.name}`);
+                  setNotifiedTaskIds(prev => {
+                     const newSet = new Set(prev);
+                     newSet.delete(task.id);
+                     return newSet;
+                   });
+             }
+        });
+    }, [tasks, notificationPermission, notifiedTaskIds, sendAiriNotification]);
+
+
+    // Effect to run notification check periodically
+    React.useEffect(() => {
+        // Clear existing interval if tasks or permission change
+        if (notificationIntervalRef.current) {
+            clearInterval(notificationIntervalRef.current);
+        }
+
+        // Only set interval if permission is granted
+        if (notificationPermission === 'granted') {
+             // Run immediately on permission grant or task change
+            checkAndSendNotifications();
+            // Set interval to check every minute
+            notificationIntervalRef.current = setInterval(checkAndSendNotifications, 1000 * 60); // 60 seconds
+        }
+
+        // Cleanup interval on component unmount
+        return () => {
+            if (notificationIntervalRef.current) {
+                clearInterval(notificationIntervalRef.current);
+            }
+        };
+    }, [tasks, notificationPermission, checkAndSendNotifications]);
 
 
   // --- Form Handling ---
@@ -413,21 +560,31 @@ export function TaskManager() {
     // Additional check for schema refine condition (handled by zodResolver)
 
     try {
+       const taskName = data.name; // Keep for toast message
       if (editingTask) {
         // Update existing task
         setTasks(
           tasks.map((task) =>
             task.id === editingTask.id
-              ? { ...task, ...data, dueDate: combinedDueDate } // Update with combined date or null
+              ? { ...task, ...data, dueDate: combinedDueDate, name: taskName } // Ensure name is updated too
               : task
           )
         );
-        toast({ title: 'Task Updated', description: `"${data.name}" has been updated.` });
+        toast({ title: 'Task Updated', description: `"${taskName}" has been updated.` });
+        // If due date was changed, remove from notified set to allow re-notification
+        if (editingTask.dueDate?.getTime() !== combinedDueDate?.getTime()) {
+             setNotifiedTaskIds(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(editingTask.id);
+                return newSet;
+            });
+        }
+
       } else {
         // Add new task
         const newTask: PrioritizedTask = {
           id: crypto.randomUUID(), // Use modern browser API
-          name: data.name,
+          name: taskName,
           description: data.description || '',
           dueDate: combinedDueDate, // Assign combined date or null
           category: data.category,
@@ -435,7 +592,7 @@ export function TaskManager() {
           // Priority/reason might be added later by AI
         };
         setTasks([newTask, ...tasks]);
-        toast({ title: 'Task Added', description: `"${data.name}" has been added.` });
+        toast({ title: 'Task Added', description: `"${taskName}" has been added.` });
       }
       // Form reset is handled by useEffect based on isEditDialogOpen
       setEditingTask(null);
@@ -472,6 +629,12 @@ export function TaskManager() {
   // Delete task
   const handleDelete = (id: string, name: string) => {
     setTasks(tasks.filter((task) => task.id !== id));
+     // Remove from notified set if deleted
+     setNotifiedTaskIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(id);
+        return newSet;
+     });
     toast({ title: 'Task Deleted', description: `"${name}" has been removed.` });
   };
 
@@ -482,6 +645,12 @@ export function TaskManager() {
         task.id === id ? { ...task, completed: !task.completed } : task
       )
     );
+    // Remove from notified set if completed
+     setNotifiedTaskIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(id);
+        return newSet;
+     });
   };
 
   // --- Airi Chat ---
@@ -506,22 +675,19 @@ export function TaskManager() {
             utterance.voice = selectedVoice;
              // Apply minor adjustments - these are highly voice-dependent
              // Pitch/rate adjustments for perceived accent (experimental)
-             if (selectedVoice.lang.startsWith('ja')) {
-                // If using a Japanese voice to speak English
-                utterance.pitch = 1.0; // May need adjustment
-                utterance.rate = 0.9; // Slightly slower might emphasize accent
-             } else if (selectedVoice.name.includes("Google")) {
-                 utterance.pitch = 1.1; // Slightly higher pitch for Google voices might sound better
-                 utterance.rate = 1.05; // Slightly faster rate
-             } else {
-                 utterance.pitch = 1.0; // Default pitch
-                 utterance.rate = 1.0;  // Default rate
-             }
+             // Trying to achieve a Japanese-English accent is very hard with standard TTS.
+             // Higher pitch and slightly adjusted rate might give a *hint* but won't be authentic.
+             utterance.pitch = 1.1; // Slightly higher pitch
+             utterance.rate = 0.95; // Slightly adjusted rate
+
+             console.log(`Attempting TTS with voice: ${utterance.voice?.name}, lang: ${utterance.voice?.lang}, rate: ${utterance.rate}, pitch: ${utterance.pitch}`);
+
         } else {
             console.warn("No suitable TTS voice found, using system default.");
             // Use default pitch/rate if no voice selected
             utterance.pitch = 1.0;
             utterance.rate = 1.0;
+             console.log(`Using default TTS voice, rate: ${utterance.rate}, pitch: ${utterance.pitch}`);
         }
 
 
@@ -534,7 +700,6 @@ export function TaskManager() {
             });
         };
 
-        console.log(`Speaking with voice: ${utterance.voice?.name || 'default'}, lang: ${utterance.voice?.lang || 'default'}, rate: ${utterance.rate}, pitch: ${utterance.pitch}`);
         window.speechSynthesis.speak(utterance);
     }, [isTTSEnabled, selectedVoice, toast]);
 
@@ -556,18 +721,18 @@ export function TaskManager() {
         currentTasks: tasks.filter(t => !t.completed).map(t => ({
             id: t.id,
             name: t.name,
-            description: `${t.name}: ${t.description}`, // Combine name and description for better context
-            // Send ISO string if dueDate exists and is valid, otherwise send undefined/null
-            dueDate: (t.dueDate && isValid(t.dueDate)) ? t.dueDate.toISOString() : null, // Use null instead of undefined
+            description: `${t.name}: ${t.description || 'No description.'}`, // Combine name and description
+            // Send ISO string if dueDate exists and is valid, otherwise send null
+            dueDate: (t.dueDate && isValid(t.dueDate)) ? t.dueDate.toISOString() : null,
             category: t.category,
             completed: t.completed,
         })),
       };
-      console.log("Sending to Airi:", JSON.stringify(airiInput, null, 2)); // Log input
+      console.log("[onSubmitAiriChat] Sending to Airi:", JSON.stringify(airiInput, null, 2)); // Log input
 
       // Call the Airi chat flow
       const airiOutput: AiriChatOutput = await airiChat(airiInput);
-      console.log("Received from Airi:", JSON.stringify(airiOutput, null, 2)); // Log output
+      console.log("[onSubmitAiriChat] Received from Airi:", JSON.stringify(airiOutput, null, 2)); // Log output
 
       // Add Airi's response to chat history
        // Check if response exists before adding
@@ -937,11 +1102,11 @@ export function TaskManager() {
 
     return (
         <ul className="space-y-3">
-            {taskList.map((task) => (
+            {taskList.map((task, index) => ( // Added index for animation delay
                 <li
                     key={task.id}
                     className={cn(
-                        "flex items-start gap-3 p-3 border rounded-lg transition-opacity duration-300 ease-in-out animate-in fade-in-0", // Added animation classes
+                        "flex items-start gap-3 p-3 border rounded-lg transition-opacity duration-300 ease-in-out animate-in fade-in-0", // Base animation
                         isCompletedList
                             ? 'bg-secondary/30 border-dashed opacity-70' // Style for completed tasks
                             : cn(
@@ -951,7 +1116,7 @@ export function TaskManager() {
                                 task.priority === 3 && "border-l-4 border-l-yellow-500"
                               )
                     )}
-                    style={{ animationDelay: `${Math.random() * 0.2}s` }} // Stagger animation slightly
+                     style={{ animationDelay: `${index * 0.05}s` }} // Stagger animation slightly
                 >
                     <Checkbox
                         id={`task-${task.id}`}
@@ -1051,6 +1216,44 @@ export function TaskManager() {
             <CheckCircle className="w-7 h-7" /> TaskMaster
           </h1>
           <div className="flex items-center gap-2">
+            {/* Notification Button */}
+            {(notificationPermission === 'default' || notificationPermission === 'denied') && (
+                <TooltipProvider delayDuration={100}>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={requestNotificationPermission}
+                                className="gap-1.5 transition-transform hover:scale-105 active:scale-95"
+                            >
+                                <Bell className="w-4 h-4" />
+                                <span className="hidden sm:inline">Enable Reminders</span>
+                            </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                            {notificationPermission === 'denied' ? 'Notifications Blocked (Click to see info)' : 'Enable Task Reminders'}
+                        </TooltipContent>
+                    </Tooltip>
+                </TooltipProvider>
+             )}
+             {notificationPermission === 'granted' && (
+                  <TooltipProvider delayDuration={100}>
+                     <Tooltip>
+                         <TooltipTrigger asChild>
+                              <Button
+                                 variant="outline"
+                                 size="icon"
+                                 className="text-green-600 cursor-default transition-transform hover:scale-105 active:scale-95"
+                                 aria-label="Notifications Enabled"
+                              >
+                                 <Bell className="w-4 h-4" />
+                              </Button>
+                         </TooltipTrigger>
+                         <TooltipContent>Task Reminders Enabled</TooltipContent>
+                     </Tooltip>
+                  </TooltipProvider>
+             )}
              {/* Chatbot Trigger */}
              <Sheet open={isChatOpen} onOpenChange={setIsChatOpen}>
                 <SheetTrigger asChild>
@@ -1083,7 +1286,7 @@ export function TaskManager() {
                               "flex items-end gap-2 text-sm animate-in fade-in slide-in-from-bottom-2 duration-300", // Chat message animation
                               msg.role === 'user' ? 'justify-end slide-in-from-right-4' : 'justify-start slide-in-from-left-4' // Directional slide
                             )}
-                            style={{ animationDelay: `${index * 0.05}s` }} // Stagger message animation slightly
+                             style={{ animationDelay: `${index * 0.05}s` }} // Stagger message animation slightly
                           >
                             {msg.role === 'airi' && <img src="https://picsum.photos/32/32?random=3" alt="Airi Avatar" data-ai-hint="cute anime girl side profile" className="w-5 h-5 rounded-full mb-1" />}
                             {msg.role === 'system' && (
