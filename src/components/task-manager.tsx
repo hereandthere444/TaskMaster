@@ -1,12 +1,11 @@
 /**
  * @fileoverview Main component for managing tasks, including adding, displaying, prioritizing, and deleting tasks.
  * Integrates AI chatbot 'Airi' for task prioritization, creation via chat, motivation, and advice.
+ * Includes Text-to-Speech for Airi's responses.
  */
 'use client';
 
-// import type { Task } from '@/ai/flows/prioritize-tasks'; // No longer needed directly
-// import { prioritizeTasks } from '@/ai/flows/prioritize-tasks'; // No longer called directly
-import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData } from '@/ai/flows/airi-chat-flow'; // Import the new chat flow and types
+import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData } from '@/ai/flows/airi-chat-flow'; // Import the chat flow and types
 import { sendPersistentNotification } from '@/services/notification';
 import * as React from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -27,7 +26,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/componen
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Trash2, Sparkles, Zap, Calendar as CalendarIcon, Clock, Bot, SendHorizontal, User } from 'lucide-react'; // Added Bot, SendHorizontal, User; Removed Mic related
+import { Trash2, Sparkles, Zap, Calendar as CalendarIcon, Clock, Bot, SendHorizontal, User, Volume2, VolumeX } from 'lucide-react'; // Added Volume2, VolumeX
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
@@ -48,8 +47,6 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger, SheetFooter, SheetDescription, SheetClose } from "@/components/ui/sheet"; // Import Sheet components
-
-// Removed SpeechRecognition declaration as voice input is replaced by chat
 
 // Keep PrioritizedTask interface consistent
 export interface PrioritizedTask { // Make sure to export if needed by flows/tools
@@ -121,8 +118,6 @@ function DateTimePicker({ value, onChange, disabled }: { value: Date | undefined
         setHour12('09');
         setMinute('00');
         setPeriod('AM');
-        // Do NOT call onChange here to avoid setting form state before user interaction
-        // onChange(defaultDate); // Removed
       }
     // Update only when the external `value` changes explicitly
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -198,26 +193,89 @@ function DateTimePicker({ value, onChange, disabled }: { value: Date | undefined
 export function TaskManager() {
   const [tasks, setTasks] = React.useState<PrioritizedTask[]>([]);
   const [forceMode, setForceMode] = React.useState(false);
-  const [isLoadingAI, setIsLoadingAI] = React.useState(false); // Now used for chat processing
+  const [isLoadingAI, setIsLoadingAI] = React.useState(false);
   const [isLoadingTasks, setIsLoadingTasks] = React.useState(true);
-  // Removed recording/voice states
   const [chatMessages, setChatMessages] = React.useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = React.useState('');
-  const [isChatOpen, setIsChatOpen] = React.useState(false); // State for chat sheet
+  const [isChatOpen, setIsChatOpen] = React.useState(false);
   const chatScrollAreaRef = React.useRef<HTMLDivElement>(null);
-  const chatInputFieldRef = React.useRef<HTMLInputElement>(null); // Ref for input field
+  const chatInputFieldRef = React.useRef<HTMLInputElement>(null);
+  const [isTTSEnabled, setIsTTSEnabled] = React.useState(true); // State for TTS toggle
+  const [voices, setVoices] = React.useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = React.useState<SpeechSynthesisVoice | null>(null);
 
   const { toast } = useToast();
   const notificationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
-  // Removed recognitionRef
 
-  // Default dueDate (Keep as before)
   const defaultDueDate = setMinutes(setHours(new Date(), 9), 0);
 
   const form = useForm<TaskFormData>({
     resolver: zodResolver(taskFormSchema),
     defaultValues: { name: '', description: '', dueDate: undefined, category: 'goal' },
   });
+
+  // --- TTS Setup ---
+  React.useEffect(() => {
+    const loadVoices = () => {
+      const availableVoices = window.speechSynthesis.getVoices();
+      if (availableVoices.length > 0) {
+        setVoices(availableVoices);
+        // Attempt to find a Japanese English voice (heuristic, likely won't work reliably)
+        // Or fallback to a standard English voice
+        let airiVoice = availableVoices.find(v => v.lang.startsWith('en') && (v.name.includes('Japanese') || v.name.includes('Female')));
+        if (!airiVoice) {
+            airiVoice = availableVoices.find(v => v.lang.startsWith('en') && v.name.includes('Female')); // Fallback to any female English voice
+        }
+        if (!airiVoice) {
+            airiVoice = availableVoices.find(v => v.lang.startsWith('en')); // Fallback to any English voice
+        }
+        setSelectedVoice(airiVoice || null);
+        console.log("Available TTS voices:", availableVoices.map(v => ({ name: v.name, lang: v.lang })));
+        if(airiVoice) console.log("Selected Airi voice:", airiVoice.name);
+        else console.log("No suitable English voice found, using default.");
+
+      }
+    };
+
+    // Voices load asynchronously
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    loadVoices(); // Initial attempt
+
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null; // Cleanup listener
+      window.speechSynthesis.cancel(); // Cancel any ongoing speech on unmount
+    };
+  }, []);
+
+  const speakText = React.useCallback((text: string) => {
+    if (!isTTSEnabled || !text || typeof window.speechSynthesis === 'undefined') {
+      return;
+    }
+
+    // Cancel any previous speech
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+    }
+    // Optional: Adjust pitch and rate for personality, though finding the accent is the main goal
+    utterance.pitch = 1.1; // Slightly higher pitch
+    utterance.rate = 1;   // Normal rate
+
+    // Handle potential errors
+    utterance.onerror = (event) => {
+      console.error('SpeechSynthesisUtterance Error:', event.error);
+      toast({
+          title: "TTS Error",
+          description: `Could not speak: ${event.error}`,
+          variant: "destructive",
+      });
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }, [isTTSEnabled, selectedVoice, toast]);
+
 
   // --- useEffect Hooks (Keep Load/Save and Force Mode as before) ---
   React.useEffect(() => {
@@ -391,10 +449,16 @@ export function TaskManager() {
                isError: !airiOutput.success, // Mark as error if success is false
            };
 
+           // Speak Airi's response
+           if (airiOutput.success && airiOutput.response) {
+                speakText(airiOutput.response);
+           }
+
            // Handle specific errors reported by the flow
            if (!airiOutput.success && airiOutput.error) {
                console.error("[TaskManager] Airi flow returned a critical error:", airiOutput.error);
                newAiriMessage.text = airiOutput.response || `Hmph. Critical error: ${airiOutput.error}`; // Use error response if available
+               speakText(newAiriMessage.text); // Speak the error message
                toast({
                    title: 'Airi Critical Error',
                    description: airiOutput.error,
@@ -426,6 +490,7 @@ export function TaskManager() {
                          // Add a note to Airi's response if it doesn't already mention the failure
                          if (!newAiriMessage.text.includes("couldn't add the task") && !newAiriMessage.text.includes("messed up")) {
                            newAiriMessage.text += " (But I couldn't add the task, the details were wrong or the date was invalid.)";
+                           speakText(" (But I couldn't add the task, the details were wrong or the date was invalid.)"); // Speak the addendum
                          }
                          toast({
                             title: 'Task Creation Issue',
@@ -469,10 +534,6 @@ export function TaskManager() {
                          });
                      } else {
                          console.warn("[TaskManager] Airi returned prioritization data, but no matching incomplete tasks were found or updated.");
-                         // Optionally add to Airi's response if desired
-                          // if (!newAiriMessage.text.includes("prioritize")) {
-                          //    newAiriMessage.text += " (I looked at the priorities, but nothing needed changing.)";
-                          // }
                      }
                  }
            }
@@ -489,6 +550,7 @@ export function TaskManager() {
               timestamp: new Date(),
               isError: true,
           };
+          speakText(errorResponseMessage.text); // Speak the critical error
           setChatMessages((prev) => [...prev, errorResponseMessage]);
           toast({
               title: 'Chat Connection Error',
@@ -525,8 +587,6 @@ export function TaskManager() {
     form.reset({ name: '', description: '', dueDate: undefined, category: 'goal' }); // Reset with undefined date
     toast({ title: "Task Added", description: `"${data.name}" added. Due: ${format(finalDueDate, 'Pp')}` });
   }
-
-  // --- handlePrioritize Removed (handled by chat now) ---
 
   // --- deleteTask & toggleTaskCompletion (Keep as before) ---
   const deleteTask = (id: string) => {
@@ -650,13 +710,28 @@ export function TaskManager() {
               </SheetTrigger>
               {/* Adjust side and potentially width constraints */}
               <SheetContent className="w-full max-w-lg flex flex-col p-0" side="right">
-                 <SheetHeader className="p-6 pb-4 border-b">
-                      <SheetTitle className="flex items-center gap-2 text-xl">
-                          <Bot className="h-6 w-6 text-primary" /> Chat with Airi
-                      </SheetTitle>
-                      <SheetDescription>
-                         Your tsundere assistant for tasks, motivation, and advice.
-                      </SheetDescription>
+                 <SheetHeader className="p-6 pb-4 border-b flex flex-row justify-between items-center"> {/* Added flex for layout */}
+                      <div> {/* Container for title and description */}
+                          <SheetTitle className="flex items-center gap-2 text-xl">
+                              <Bot className="h-6 w-6 text-primary" /> Chat with Airi
+                          </SheetTitle>
+                          <SheetDescription>
+                             Your tsundere assistant for tasks, motivation, and advice.
+                          </SheetDescription>
+                      </div>
+                       {/* TTS Toggle Button */}
+                      <Button
+                           variant="ghost"
+                           size="icon"
+                           onClick={() => {
+                              setIsTTSEnabled((prev) => !prev);
+                              if (isTTSEnabled) window.speechSynthesis.cancel(); // Stop speaking if disabling
+                           }}
+                           title={isTTSEnabled ? "Mute Airi's voice" : "Unmute Airi's voice"}
+                       >
+                           {isTTSEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5 text-muted-foreground" />}
+                           <span className="sr-only">{isTTSEnabled ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}</span>
+                      </Button>
                  </SheetHeader>
                   {/* Chat Messages Area */}
                   <ScrollArea className="flex-grow p-4" viewportRef={chatScrollAreaRef}> {/* Use viewportRef */}
@@ -680,8 +755,6 @@ export function TaskManager() {
                                       msg.isError && msg.sender === 'airi' ? 'bg-destructive/20 text-destructive-foreground border border-destructive' : '' // Style for errors
                                       )}>
                                       <p className="text-sm whitespace-pre-wrap">{msg.text}</p> {/* Allow wrapping */}
-                                      {/* Optional rendering for task/priority data */}
-                                      {/* {msg.taskData && ... } */}
                                       <p className="text-xs mt-1 opacity-70 text-right">{format(msg.timestamp, 'p')}</p>
                                   </div>
                                    {msg.sender === 'user' && <User className="h-6 w-6 text-muted-foreground shrink-0 mb-1" />}
@@ -716,9 +789,6 @@ export function TaskManager() {
                   </SheetFooter>
               </SheetContent>
          </Sheet>
-
-          {/* Removed Prioritize Button */}
-          {/* Removed Voice Command Button */}
 
           {/* Force Mode Switch (Keep as before) */}
           <div className="flex items-center space-x-2 p-2 rounded-md bg-secondary/50 border">
@@ -783,3 +853,4 @@ export function TaskManager() {
     </div>
   );
 }
+
