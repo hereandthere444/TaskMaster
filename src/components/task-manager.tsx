@@ -266,15 +266,6 @@ export function TaskManager() {
             setSelectedVoice(bestVoice || null); // Use the best found voice or null
             console.log("Selected TTS Voice:", bestVoice?.name, bestVoice?.lang, `(Default: ${bestVoice?.default})`);
 
-            // --- Explanation for the User ---
-            // console.warn("Note: Specific voices like 'Gemini Assistant' are part of Google's backend services and cannot be directly selected via the browser's Web Speech API. This app uses the best available female English voice provided by your browser/OS.");
-            // toast({ // Optional: Inform user about voice limitations
-            //     title: "TTS Voice Note",
-            //     description: "Using the best available female English voice on your system. Specific voices like 'Gemini' are not selectable via browser APIs.",
-            //     duration: 7000,
-            // });
-
-
         } else {
             console.log("Waiting for voices to load...");
         }
@@ -986,7 +977,7 @@ export function TaskManager() {
              <Sheet open={isChatOpen} onOpenChange={setIsChatOpen}>
                 <SheetTrigger asChild>
                    <Button variant="outline" size="sm" className="gap-1.5">
-                     <img src="https://picsum.photos/32/32" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-4 h-4 rounded-full" />
+                     <img src="https://picsum.photos/32/32?random=1" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-4 h-4 rounded-full" />
                      Airi Assistant
                    </Button>
                 </SheetTrigger>
@@ -1003,7 +994,7 @@ export function TaskManager() {
                          {/* Welcome Message */}
                         {chatMessages.length === 0 && (
                           <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground italic justify-center">
-                            <img src="https://picsum.photos/32/32" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-5 h-5 rounded-full" />
+                            <img src="https://picsum.photos/32/32?random=2" alt="Airi Avatar" data-ai-hint="cute anime girl blush" className="w-5 h-5 rounded-full" />
                             <span>What do you want? Don't waste my time...</span>
                           </div>
                         )}
@@ -1015,7 +1006,7 @@ export function TaskManager() {
                               msg.role === 'user' ? 'justify-end' : 'justify-start'
                             )}
                           >
-                            {msg.role === 'airi' && <img src="https://picsum.photos/32/32" alt="Airi Avatar" data-ai-hint="cute anime girl" className="w-5 h-5 rounded-full mb-1" />}
+                            {msg.role === 'airi' && <img src="https://picsum.photos/32/32?random=3" alt="Airi Avatar" data-ai-hint="cute anime girl side profile" className="w-5 h-5 rounded-full mb-1" />}
                             {msg.role === 'system' && (
                                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-destructive shrink-0 mb-1" viewBox="0 0 20 20" fill="currentColor">
                                 <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -1054,7 +1045,7 @@ export function TaskManager() {
                         ))}
                          {isAiLoading && (
                            <div className="flex justify-start items-center gap-2 p-3">
-                              <img src="https://picsum.photos/32/32" alt="Airi Avatar Thinking" data-ai-hint="cute anime girl thinking" className="w-5 h-5 rounded-full animate-pulse" />
+                              <img src="https://picsum.photos/32/32?random=4" alt="Airi Avatar Thinking" data-ai-hint="cute anime girl thinking" className="w-5 h-5 rounded-full animate-pulse" />
                               {/* Simple "Thinking..." text */}
                              <span className="text-sm text-muted-foreground italic">Airi is thinking...</span>
                               {/* Optional: Skeleton lines */}
@@ -1316,7 +1307,8 @@ export function TaskManager() {
             </TabsContent>
 
             {/* Content for Chores Tab */}
-             <TabsContent value="chores" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0"> {/* Adjusted classes */}
+             {/* Use consistent classes with Goals Tab */}
+             <TabsContent value="chores" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0">
                  <Card className="flex-1 flex flex-col shadow-md">
                     <CardContent className="flex-1 p-0"> {/* Remove padding from CardContent */}
                         <ScrollArea className="h-full p-4"> {/* Add ScrollArea here */}
