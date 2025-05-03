@@ -1,17 +1,37 @@
 /**
- * @fileoverview Main component for managing tasks, including adding, displaying, prioritizing, and deleting tasks.
- * Integrates AI chatbot 'Airi' for task prioritization, creation via chat, motivation, and advice.
- * Includes Text-to-Speech for Airi's responses.
+ * @fileoverview Task management component with AI chat integration (Airi).
+ * Allows adding, viewing, completing, deleting tasks, and interacting with Airi.
  */
 'use client';
 
-import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData } from '@/ai/flows/airi-chat-flow'; // Import the chat flow and types
-import { sendPersistentNotification } from '@/services/notification';
 import * as React from 'react';
+import { format, isValid, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useForm, Controller } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { v4 as uuidv4 } from 'uuid'; // For generating unique IDs
+
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+  CardFooter,
+} from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogTrigger,
+  DialogClose,
+} from '@/components/ui/dialog';
 import {
   Form,
   FormControl,
@@ -20,837 +40,1137 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
-import { Trash2, Sparkles, Zap, Calendar as CalendarIcon, Clock, Bot, SendHorizontal, User, Volume2, VolumeX } from 'lucide-react'; // Added Volume2, VolumeX
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Calendar } from '@/components/ui/calendar';
-import { cn } from '@/lib/utils';
-import { format, isPast, parseISO, setHours, setMinutes, startOfDay, isValid } from 'date-fns';
-import { useToast } from '@/hooks/use-toast';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger, SheetFooter, SheetDescription, SheetClose } from "@/components/ui/sheet"; // Import Sheet components
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Calendar } from '@/components/ui/calendar';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+  SheetClose,
+  SheetTrigger,
+} from '@/components/ui/sheet'; // Import Sheet components
+import { ScrollArea } from '@/components/ui/scroll-area'; // Import ScrollArea
+import { Badge } from '@/components/ui/badge'; // Import Badge
+import { Switch } from '@/components/ui/switch'; // Import Switch
+import { cn } from '@/lib/utils';
+import { useToast } from '@/hooks/use-toast';
+import {
+  CalendarIcon,
+  CheckCircle,
+  Circle,
+  Clock,
+  Trash2,
+  Plus,
+  Sparkles,
+  Send,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import { Skeleton } from './ui/skeleton';
+import { airiChat, type AiriChatInput, type AiriChatOutput, type PrioritizedTaskData as AiriPrioritizedTaskData } from '@/ai/flows/airi-chat-flow'; // Import Airi chat flow
+import type { CreateTaskOutput as AiriCreatedTask } from '@/ai/schemas'; // Import shared type
 
-// Keep PrioritizedTask interface consistent
-export interface PrioritizedTask { // Make sure to export if needed by flows/tools
+// Define the structure of a task
+export interface PrioritizedTask {
   id: string;
   name: string;
   description: string;
-  dueDate: Date; // Ensure dueDate is always Date object
+  dueDate: Date;
   category: 'goal' | 'chore';
   completed: boolean;
   priority?: number;
   reason?: string;
 }
 
-// Chat message structure
-interface ChatMessage {
-    id: string;
-    sender: 'user' | 'airi';
-    text: string;
-    timestamp: Date;
-    // Optional: include task data if relevant to the message
-    taskData?: PrioritizedTask | PrioritizedTaskData[]; // Use specific type for prioritized data
-    isError?: boolean; // Flag for error messages
-}
+// --- Form Schemas ---
 
+// Schema for adding/editing tasks
 const taskFormSchema = z.object({
-  name: z.string().min(1, { message: 'Task name cannot be empty.' }),
-  description: z.string().min(1, { message: 'Description cannot be empty.' }),
-  dueDate: z.date({ required_error: "A due date and time is required." }),
+  name: z.string().min(1, { message: 'Task name is required.' }),
+  description: z.string().optional(),
+  dueDate: z.date({ required_error: 'A due date is required.' }),
+  // Time format including AM/PM
+  dueTime: z.string().regex(/^(0?[1-9]|1[0-2]):([0-5]\d) (AM|PM)$/i, { message: 'Invalid time (HH:MM AM/PM).' }).optional(),
   category: z.enum(['goal', 'chore']),
 });
 
 type TaskFormData = z.infer<typeof taskFormSchema>;
 
-// --- Motivational/Taunting Messages (Keep as before) ---
-const motivationalMessages = [
-    "Get this goal done, or else...",
-    "Stop procrastinating on this goal!",
-    "This goal isn't going to complete itself...",
-    "Are you even trying to achieve this goal?",
-    "Tick-tock... this goal's deadline is approaching.",
-    "Don't let this important goal slip away!",
-];
-const tauntingMessages = [
-    "Still haven't finished this? Pathetic.",
-    "I expected better from you regarding this task.",
-    "At this rate, you'll never finish this.",
-    "Is this task too hard for you?",
-    "Maybe you should just give up on this one.",
-    "I'm starting to doubt your abilities.",
-];
+// Schema for Airi chat input
+const airiChatFormSchema = z.object({
+  message: z.string().min(1, { message: 'Message cannot be empty.' }),
+});
+type AiriChatFormData = z.infer<typeof airiChatFormSchema>;
 
+// --- Speech Recognition ---
+// Check for SpeechRecognition API availability
+const SpeechRecognition =
+  (typeof window !== 'undefined' && window.SpeechRecognition) ||
+  (typeof window !== 'undefined' && (window as any).webkitSpeechRecognition);
 
-// --- DateTimePicker Component (Keep as before) ---
-function DateTimePicker({ value, onChange, disabled }: { value: Date | undefined; onChange: (date: Date | undefined) => void; disabled?: (date: Date) => boolean }) {
-    const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(value ? startOfDay(value) : undefined);
-    const [hour12, setHour12] = React.useState<string>(value ? format(value, 'hh') : '09');
-    const [minute, setMinute] = React.useState<string>(value ? format(value, 'mm') : '00');
-    const [period, setPeriod] = React.useState<'AM' | 'PM'>(value ? (format(value, 'a') as 'AM' | 'PM') : 'AM');
-
-    React.useEffect(() => {
-      if (value && isValid(value)) {
-        setSelectedDate(startOfDay(value));
-        setHour12(format(value, 'hh'));
-        setMinute(format(value, 'mm'));
-        setPeriod(format(value, 'a') as 'AM' | 'PM');
-      } else if (!value) { // Set default only if value is initially undefined
-        const defaultDate = setMinutes(setHours(new Date(), 9), 0);
-        setSelectedDate(startOfDay(defaultDate));
-        setHour12('09');
-        setMinute('00');
-        setPeriod('AM');
-      }
-    // Update only when the external `value` changes explicitly
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [value]);
-
-    const updateDateTime = (newDate: Date | undefined, newHour12: string, newMinute: string, newPeriod: 'AM' | 'PM') => {
-        if (!newDate) {
-            onChange(undefined);
-            return;
-        }
-        let hour24 = parseInt(newHour12, 10);
-        if (newPeriod === 'PM' && hour24 !== 12) hour24 += 12;
-        else if (newPeriod === 'AM' && hour24 === 12) hour24 = 0;
-        const minuteVal = parseInt(newMinute, 10);
-        if (!isNaN(hour24) && !isNaN(minuteVal)) {
-            const newDateTime = setMinutes(setHours(newDate, hour24), minuteVal);
-            if (isValid(newDateTime)) onChange(newDateTime);
-            else console.error("Generated invalid date in DateTimePicker:", { newDate, hour24, minuteVal });
-        } else {
-             console.error("Invalid time components:", { newHour12, newMinute, newPeriod });
-        }
-    };
-
-    const handleDateSelect = (date: Date | undefined) => {
-      setSelectedDate(date);
-      updateDateTime(date, hour12, minute, period);
-    };
-
-    const handleTimeChange = (type: 'hour' | 'minute' | 'period', val: string) => {
-      let newHour12 = hour12, newMinute = minute, newPeriod = period;
-      if (type === 'hour') newHour12 = val;
-      if (type === 'minute') newMinute = val;
-      if (type === 'period') newPeriod = val as 'AM' | 'PM';
-      setHour12(newHour12); setMinute(newMinute); setPeriod(newPeriod);
-      updateDateTime(selectedDate, newHour12, newMinute, newPeriod);
-    };
-
-    const hours12 = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
-    const minutes = Array.from({ length: 60 / 5 }, (_, i) => String(i * 5).padStart(2, '0'));
-
-    return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button variant={"outline"} className={cn("w-full justify-start text-left font-normal", !value && "text-muted-foreground")}>
-            <CalendarIcon className="mr-2 h-4 w-4" />
-            {value && isValid(value) ? format(value, "PPP p") : <span>Pick a date and time</span>}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-auto p-0">
-          <Calendar mode="single" selected={selectedDate} onSelect={handleDateSelect} disabled={(date) => date < startOfDay(new Date()) || (disabled?.(date) ?? false)} initialFocus />
-          <div className="p-4 border-t border-border flex items-center justify-center space-x-2">
-            <Clock className="h-4 w-4 text-muted-foreground" />
-            <Select value={hour12} onValueChange={(val) => handleTimeChange('hour', val)}>
-              <SelectTrigger className="w-[60px]"><SelectValue placeholder="HH" /></SelectTrigger>
-              <SelectContent>{hours12.map((h) => (<SelectItem key={h} value={h}>{h}</SelectItem>))}</SelectContent>
-            </Select>
-            <span>:</span>
-            <Select value={minute} onValueChange={(val) => handleTimeChange('minute', val)}>
-              <SelectTrigger className="w-[60px]"><SelectValue placeholder="MM" /></SelectTrigger>
-              <SelectContent>{minutes.map((m) => (<SelectItem key={m} value={m}>{m}</SelectItem>))}</SelectContent>
-            </Select>
-            <Select value={period} onValueChange={(val) => handleTimeChange('period', val)}>
-                <SelectTrigger className="w-[65px]"><SelectValue placeholder="AM/PM"/></SelectTrigger>
-                <SelectContent><SelectItem value="AM">AM</SelectItem><SelectItem value="PM">PM</SelectItem></SelectContent>
-            </Select>
-          </div>
-        </PopoverContent>
-      </Popover>
-    );
-}
-
-
+// --- TaskManager Component ---
 export function TaskManager() {
   const [tasks, setTasks] = React.useState<PrioritizedTask[]>([]);
-  const [forceMode, setForceMode] = React.useState(false);
-  const [isLoadingAI, setIsLoadingAI] = React.useState(false);
   const [isLoadingTasks, setIsLoadingTasks] = React.useState(true);
-  const [chatMessages, setChatMessages] = React.useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = React.useState('');
+  const [isSubmittingTask, setIsSubmittingTask] = React.useState(false);
+  const [isAiLoading, setIsAiLoading] = React.useState(false); // State for AI loading
+  const [editingTask, setEditingTask] = React.useState<PrioritizedTask | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = React.useState(false);
+  const [chatMessages, setChatMessages] = React.useState<{ role: 'user' | 'airi' | 'system'; content: string }[]>([]);
   const [isChatOpen, setIsChatOpen] = React.useState(false);
-  const chatScrollAreaRef = React.useRef<HTMLDivElement>(null);
-  const chatInputFieldRef = React.useRef<HTMLInputElement>(null);
-  const [isTTSEnabled, setIsTTSEnabled] = React.useState(true); // State for TTS toggle
+  const [isListening, setIsListening] = React.useState(false);
+  const [isTTSEnabled, setIsTTSEnabled] = React.useState(true);
   const [voices, setVoices] = React.useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = React.useState<SpeechSynthesisVoice | null>(null);
 
   const { toast } = useToast();
-  const notificationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  const recognitionRef = React.useRef<any>(null); // Ref for SpeechRecognition instance
+  const chatScrollAreaRef = React.useRef<HTMLDivElement>(null); // Ref for chat scroll area viewport
 
-  const defaultDueDate = setMinutes(setHours(new Date(), 9), 0);
+  // --- Initialization and Data Loading ---
 
-  const form = useForm<TaskFormData>({
-    resolver: zodResolver(taskFormSchema),
-    defaultValues: { name: '', description: '', dueDate: undefined, category: 'goal' },
-  });
-
-  // --- TTS Setup ---
+  // Load tasks from localStorage on mount
   React.useEffect(() => {
-    const loadVoices = () => {
-      const availableVoices = window.speechSynthesis.getVoices();
-      if (availableVoices.length > 0) {
-        setVoices(availableVoices);
-        // Attempt to find a Japanese English voice (heuristic, likely won't work reliably)
-        // Or fallback to a standard English voice
-        let airiVoice = availableVoices.find(v => v.lang.startsWith('en') && (v.name.includes('Japanese') || v.name.includes('Female')));
-        if (!airiVoice) {
-            airiVoice = availableVoices.find(v => v.lang.startsWith('en') && v.name.includes('Female')); // Fallback to any female English voice
-        }
-        if (!airiVoice) {
-            airiVoice = availableVoices.find(v => v.lang.startsWith('en')); // Fallback to any English voice
-        }
-        setSelectedVoice(airiVoice || null);
-        console.log("Available TTS voices:", availableVoices.map(v => ({ name: v.name, lang: v.lang })));
-        if(airiVoice) console.log("Selected Airi voice:", airiVoice.name);
-        else console.log("No suitable English voice found, using default.");
-
-      }
-    };
-
-    // Voices load asynchronously
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-    loadVoices(); // Initial attempt
-
-    return () => {
-      window.speechSynthesis.onvoiceschanged = null; // Cleanup listener
-      window.speechSynthesis.cancel(); // Cancel any ongoing speech on unmount
-    };
-  }, []);
-
-  const speakText = React.useCallback((text: string) => {
-    if (!isTTSEnabled || !text || typeof window.speechSynthesis === 'undefined') {
-      return;
-    }
-
-    // Cancel any previous speech
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-    }
-    // Optional: Adjust pitch and rate for personality, though finding the accent is the main goal
-    utterance.pitch = 1.1; // Slightly higher pitch
-    utterance.rate = 1;   // Normal rate
-
-    // Handle potential errors
-    utterance.onerror = (event) => {
-      console.error('SpeechSynthesisUtterance Error:', event.error);
-      toast({
-          title: "TTS Error",
-          description: `Could not speak: ${event.error}`,
-          variant: "destructive",
-      });
-    };
-
-    window.speechSynthesis.speak(utterance);
-  }, [isTTSEnabled, selectedVoice, toast]);
-
-
-  // --- useEffect Hooks (Keep Load/Save and Force Mode as before) ---
-  React.useEffect(() => {
-    // Load tasks logic (no changes needed)
-    setIsLoadingTasks(true); // Set loading true at the start
     try {
       const savedTasks = localStorage.getItem('tasks');
       if (savedTasks) {
-          const parsedTasks: PrioritizedTask[] = JSON.parse(savedTasks).map((task: any) => {
-            let parsedDate = task.dueDate ? parseISO(task.dueDate) : null;
-            if (!parsedDate || !isValid(parsedDate)) {
-                console.warn(`Invalid or missing dueDate for task "${task.name || task.id}". Defaulting to now.`);
-                parsedDate = new Date();
-            }
-              return {
-                  ...task,
-                  name: task.name || task.description || `Task ${task.id}`, // Ensure name exists
-                  dueDate: parsedDate,
-                  category: task.category || 'goal', // Default category
-                  completed: !!task.completed, // Ensure boolean
-                  // Retain priority/reason if they exist
-                  priority: task.priority,
-                  reason: task.reason,
-              };
-          }).sort((a, b) => { // Sort after loading, considering priority first
-             const priorityA = a.priority ?? Infinity;
-             const priorityB = b.priority ?? Infinity;
-             if (priorityA !== priorityB) return priorityA - priorityB;
-             const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
-             const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
-             return dateA - dateB;
-          });
-          setTasks(parsedTasks);
-          console.log("Tasks loaded from localStorage:", parsedTasks.length);
-      } else {
-         console.log("No tasks found in localStorage.");
+        const parsedTasks: PrioritizedTask[] = JSON.parse(savedTasks).map(
+          (task: any) => ({
+            ...task,
+            name: task.name || task.description || 'Unnamed Task', // Ensure name exists
+            dueDate: task.dueDate ? parseISO(task.dueDate) : new Date(), // Parse ISO string to Date
+            category: task.category || 'goal', // Default category
+            completed: task.completed || false, // Default completion
+          })
+        ).filter(task => isValid(task.dueDate)); // Filter out tasks with invalid dates
+        setTasks(parsedTasks);
       }
     } catch (error) {
-        console.error('Failed to load tasks from localStorage:', error);
-        toast({
-            title: 'Error Loading Tasks',
-            description: 'Could not load tasks from local storage.',
-            variant: 'destructive',
-        });
+      console.error('Failed to load tasks from localStorage:', error);
+      toast({
+        title: 'Error Loading Tasks',
+        description: 'Could not load your tasks.',
+        variant: 'destructive',
+      });
     } finally {
-        setIsLoadingTasks(false); // Set loading false at the end
+      setIsLoadingTasks(false);
     }
-   }, [toast]); // Only depends on toast
+  }, [toast]);
 
+  // Save tasks to localStorage whenever they change
   React.useEffect(() => {
-    // Save tasks logic (no changes needed)
-      if (!isLoadingTasks) {
-          try {
-              // Convert Date objects back to ISO strings for storage
-              const tasksToSave = tasks.map(task => ({ ...task, dueDate: task.dueDate.toISOString() }));
-              localStorage.setItem('tasks', JSON.stringify(tasksToSave));
-              console.log("Tasks saved to localStorage:", tasksToSave.length);
-          } catch (error) {
-              console.error('Failed to save tasks to localStorage:', error);
-              toast({
-                title: 'Error Saving Tasks',
-                description: 'Could not save tasks to local storage.',
-                variant: 'destructive',
-              });
-          }
+    if (!isLoadingTasks) { // Only save after initial load
+      try {
+        localStorage.setItem('tasks', JSON.stringify(tasks));
+      } catch (error) {
+        console.error('Failed to save tasks to localStorage:', error);
+        toast({
+          title: 'Error Saving Tasks',
+          description: 'Could not save task changes.',
+          variant: 'destructive',
+        });
       }
+    }
   }, [tasks, isLoadingTasks, toast]);
 
-  React.useEffect(() => {
-    // Force mode logic (updated for clarity)
-    if (forceMode) {
-      notificationIntervalRef.current = setInterval(() => {
-        const incompleteGoals = tasks.filter(task => task.category === 'goal' && !task.completed);
-        // const incompleteChores = tasks.filter(task => task.category === 'chore' && !task.completed); // Chores no longer trigger taunts
+   // Load TTS Voices
+   React.useEffect(() => {
+       const loadVoices = () => {
+           const availableVoices = window.speechSynthesis.getVoices();
+           if (availableVoices.length > 0) {
+               setVoices(availableVoices);
+               // Attempt to find a Japanese English voice (heuristic, likely won't work reliably)
+               // Or fallback to a standard English voice
+               let airiVoice = availableVoices.find(v => v.lang.startsWith('en') && (v.name.includes('Japanese') || v.name.includes('Female'))); // Checks for 'Japanese' or 'Female'
+               if (!airiVoice) {
+                   airiVoice = availableVoices.find(v => v.lang.startsWith('en') && v.name.includes('Female')); // Fallback to any female English voice
+               }
+               if (!airiVoice) {
+                   airiVoice = availableVoices.find(v => v.lang.startsWith('en')); // Fallback to any English voice
+               }
+               setSelectedVoice(airiVoice || null);
+               console.log("Selected TTS Voice:", airiVoice?.name, airiVoice?.lang);
+               console.log("All Available Voices:", availableVoices.map(v => ({ name: v.name, lang: v.lang })));
+           }
+       };
 
-        if (incompleteGoals.length > 0) {
-          const randomGoal = incompleteGoals[Math.floor(Math.random() * incompleteGoals.length)];
-          const randomTaunt = tauntingMessages[Math.floor(Math.random() * tauntingMessages.length)];
-          const message = `🚨 ${randomTaunt} Finish goal: "${randomGoal.name}" (Due: ${format(randomGoal.dueDate, 'Pp')})`;
-          sendPersistentNotification(message);
-          toast({
-            title: '🚨 Force Mode Reminder!',
-            description: message,
-            variant: 'destructive',
-          });
-        }
-        // Optionally add simple reminders for chores here if needed, but separate from taunts
-        // else if (incompleteChores.length > 0) { ... }
-      }, 60000); // Every 60 seconds
-      toast({ title: '⚡ Force Mode Activated!', description: 'Persistent goal reminders are ON.' });
-    } else {
-      if (notificationIntervalRef.current) {
-        clearInterval(notificationIntervalRef.current);
-        notificationIntervalRef.current = null;
-        toast({ title: '⚡ Force Mode Deactivated.', description: 'Persistent reminders are OFF.' });
-      }
+       // Voices might load asynchronously
+       if ('speechSynthesis' in window) {
+           loadVoices(); // Try immediate load
+           window.speechSynthesis.onvoiceschanged = loadVoices; // Load when voices change
+       } else {
+           console.warn("Text-to-Speech synthesis not supported in this browser.");
+           setIsTTSEnabled(false);
+       }
+
+       return () => {
+           if ('speechSynthesis' in window) {
+               window.speechSynthesis.onvoiceschanged = null; // Cleanup listener
+           }
+       };
+   }, []);
+
+
+  // --- Form Handling ---
+  const taskForm = useForm<TaskFormData>({
+    resolver: zodResolver(taskFormSchema),
+    defaultValues: {
+      name: '',
+      description: '',
+      dueDate: undefined, // Initialize as undefined
+      dueTime: '', // Default to empty string
+      category: 'goal',
+    },
+  });
+
+  const airiChatForm = useForm<AiriChatFormData>({
+    resolver: zodResolver(airiChatFormSchema),
+    defaultValues: {
+      message: '',
+    },
+  });
+
+  // --- Task Operations ---
+
+   // Function to combine date and time (Handles HH:MM AM/PM)
+   const combineDateTime = (date: Date, time?: string): Date => {
+       const newDate = new Date(date);
+       newDate.setSeconds(0, 0); // Reset seconds and milliseconds
+
+       if (time) {
+           const timeParts = time.match(/(\d{1,2}):(\d{2}) (AM|PM)/i);
+           if (timeParts) {
+               let hours = parseInt(timeParts[1], 10);
+               const minutes = parseInt(timeParts[2], 10);
+               const ampm = timeParts[3].toUpperCase();
+
+               if (ampm === 'PM' && hours < 12) hours += 12;
+               if (ampm === 'AM' && hours === 12) hours = 0; // Midnight case
+
+               if (!isNaN(hours) && !isNaN(minutes)) {
+                   newDate.setHours(hours, minutes);
+               } else {
+                   // Fallback if parsing somehow fails despite regex
+                   newDate.setHours(9, 0);
+               }
+           } else {
+               // Fallback for invalid time format string (shouldn't happen with validation)
+               newDate.setHours(9, 0);
+           }
+       } else {
+           // Default to 09:00 AM if no time is provided
+           newDate.setHours(9, 0);
+       }
+       return newDate;
+   };
+
+
+  // Handle task form submission (add or edit)
+  const onSubmitTask = (data: TaskFormData) => {
+    setIsSubmittingTask(true);
+    const combinedDueDate = combineDateTime(data.dueDate, data.dueTime);
+
+    if (!isValid(combinedDueDate)) {
+       toast({
+           title: "Invalid Date/Time",
+           description: "The selected date or time is invalid. Please check your input.",
+           variant: "destructive",
+       });
+       setIsSubmittingTask(false);
+       return;
     }
-    return () => {
-      if (notificationIntervalRef.current) {
-        clearInterval(notificationIntervalRef.current);
+
+    try {
+      if (editingTask) {
+        // Update existing task
+        setTasks(
+          tasks.map((task) =>
+            task.id === editingTask.id
+              ? { ...task, ...data, dueDate: combinedDueDate }
+              : task
+          )
+        );
+        toast({ title: 'Task Updated', description: `"${data.name}" has been updated.` });
+      } else {
+        // Add new task
+        const newTask: PrioritizedTask = {
+          id: uuidv4(),
+          name: data.name,
+          description: data.description || '',
+          dueDate: combinedDueDate,
+          category: data.category,
+          completed: false,
+          // Priority/reason might be added later by AI
+        };
+        setTasks([newTask, ...tasks]);
+        toast({ title: 'Task Added', description: `"${data.name}" has been added.` });
       }
-    };
-  }, [forceMode, tasks, toast]); // Re-run if forceMode or tasks change
+      taskForm.reset();
+      setEditingTask(null);
+      setIsEditDialogOpen(false); // Close dialog after submission
+    } catch (error) {
+      console.error('Error submitting task:', error);
+      toast({
+        title: 'Error Submitting Task',
+        description: 'Could not save the task. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmittingTask(false);
+    }
+  };
 
+  // Open edit dialog and populate form
+  const handleEdit = (task: PrioritizedTask) => {
+    setEditingTask(task);
+    taskForm.reset({
+      name: task.name,
+      description: task.description,
+      dueDate: isValid(task.dueDate) ? task.dueDate : new Date(), // Ensure valid date
+       // Format time to HH:MM AM/PM for the input
+      dueTime: isValid(task.dueDate) ? format(task.dueDate, 'hh:mm a') : '',
+      category: task.category,
+    });
+    setIsEditDialogOpen(true);
+  };
 
-  // --- Chat Handling ---
+  // Delete task
+  const handleDelete = (id: string, name: string) => {
+    setTasks(tasks.filter((task) => task.id !== id));
+    toast({ title: 'Task Deleted', description: `"${name}" has been removed.` });
+  };
 
-  // Scroll to bottom of chat messages when new messages are added or chat opens
+  // Toggle task completion
+  const handleToggleComplete = (id: string) => {
+    setTasks(
+      tasks.map((task) =>
+        task.id === id ? { ...task, completed: !task.completed } : task
+      )
+    );
+  };
+
+  // --- Airi Chat ---
+
+  // Scroll chat to bottom when new messages arrive or chat opens
   React.useEffect(() => {
     if (isChatOpen && chatScrollAreaRef.current) {
-        // Delay scroll slightly to ensure DOM updates are complete
-        setTimeout(() => {
-            chatScrollAreaRef.current?.scrollTo({ top: chatScrollAreaRef.current.scrollHeight, behavior: 'smooth' });
-        }, 100); // 100ms delay might need adjustment
+        chatScrollAreaRef.current.scrollTop = chatScrollAreaRef.current.scrollHeight;
     }
   }, [chatMessages, isChatOpen]);
 
-  // Focus input when chat opens
-    React.useEffect(() => {
-        if (isChatOpen) {
-            // Delay focus slightly to ensure sheet animation is complete
-            setTimeout(() => {
-                chatInputFieldRef.current?.focus();
-            }, 300); // Adjust delay as needed
+    // Text-to-Speech Function
+    const speakText = React.useCallback((text: string) => {
+        if (!isTTSEnabled || !('speechSynthesis' in window) || !text) {
+            return; // Do nothing if disabled, not supported, or no text
         }
-    }, [isChatOpen]);
+
+        window.speechSynthesis.cancel(); // Cancel any ongoing speech
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+        } else {
+            console.warn("No suitable TTS voice found, using system default.");
+        }
+        utterance.pitch = 1.1; // Slight adjustment for character
+        utterance.rate = 1;   // Normal speed
+
+        utterance.onerror = (event) => {
+            console.error("SpeechSynthesis Error:", event.error);
+            toast({
+                title: "TTS Error",
+                description: `Could not speak: ${event.error}`,
+                variant: "destructive",
+            });
+        };
+
+        window.speechSynthesis.speak(utterance);
+    }, [isTTSEnabled, selectedVoice, toast]);
 
 
-  const handleChatSubmit = async (e?: React.FormEvent<HTMLFormElement>) => {
-      e?.preventDefault(); // Prevent form submission if used in a form
-      const messageText = chatInput.trim();
-      if (!messageText || isLoadingAI) return;
+  // Handle sending message to Airi
+  const onSubmitAiriChat = async (data: AiriChatFormData) => {
+    const userMessage = data.message;
+    airiChatForm.reset(); // Reset input field immediately
+    setIsAiLoading(true);
 
-      const newUserMessage: ChatMessage = {
-          id: crypto.randomUUID(),
-          sender: 'user',
-          text: messageText,
-          timestamp: new Date(),
+    // Add user message to chat history
+    setChatMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+
+    try {
+      // Prepare input for Airi
+      const airiInput: AiriChatInput = {
+        message: userMessage,
+        // Provide current non-completed tasks for prioritization context
+        currentTasks: tasks.filter(t => !t.completed).map(t => ({
+            id: t.id,
+            name: t.name,
+            description: t.description,
+            dueDate: isValid(t.dueDate) ? t.dueDate.toISOString() : new Date().toISOString(), // Send ISO string
+            category: t.category,
+            completed: t.completed,
+        })),
       };
+      console.log("Sending to Airi:", JSON.stringify(airiInput, null, 2)); // Log input
 
-      // Add user message and clear input immediately
-      setChatMessages((prev) => [...prev, newUserMessage]);
-      setChatInput('');
-      setIsLoadingAI(true); // Set loading state
+      // Call the Airi chat flow
+      const airiOutput: AiriChatOutput = await airiChat(airiInput);
+      console.log("Received from Airi:", JSON.stringify(airiOutput, null, 2)); // Log output
 
-      try {
-          console.log("[TaskManager] Sending to Airi:", { messageText, taskCount: tasks.length });
-          // Prepare input for Airi, including current tasks if relevant intent suspected
-          const airiInput: AiriChatInput = {
-              message: messageText,
-              // Send simplified, non-completed task structure for context
-              currentTasks: tasks.filter(t => !t.completed).map(t => ({
-                  id: t.id,
-                  name: t.name,
-                  description: t.description,
-                  dueDate: t.dueDate.toISOString(), // Send ISO string
-                  category: t.category,
-                  completed: t.completed,
-              })),
-          };
+      // Add Airi's response to chat history
+      setChatMessages((prev) => [
+        ...prev,
+        { role: 'airi', content: airiOutput.response },
+      ]);
 
-          const airiOutput: AiriChatOutput = await airiChat(airiInput);
-          console.log("[TaskManager] Received from Airi:", JSON.stringify(airiOutput, null, 2));
+      speakText(airiOutput.response); // Speak Airi's response
 
-          // Default message structure
-           let newAiriMessage: ChatMessage = {
-               id: crypto.randomUUID(),
-               sender: 'airi',
-               text: airiOutput.response || "...", // Default response if empty
-               timestamp: new Date(),
-               isError: !airiOutput.success, // Mark as error if success is false
-           };
+      // --- Handle side effects from Airi's response ---
 
-           // Speak Airi's response
-           if (airiOutput.success && airiOutput.response) {
-                speakText(airiOutput.response);
-           }
-
-           // Handle specific errors reported by the flow
-           if (!airiOutput.success && airiOutput.error) {
-               console.error("[TaskManager] Airi flow returned a critical error:", airiOutput.error);
-               newAiriMessage.text = airiOutput.response || `Hmph. Critical error: ${airiOutput.error}`; // Use error response if available
-               speakText(newAiriMessage.text); // Speak the error message
-               toast({
-                   title: 'Airi Critical Error',
-                   description: airiOutput.error,
-                   variant: 'destructive',
-               });
-           }
-           // Handle successful response with potential side effects
-           else if (airiOutput.success) {
-                // Handle created task
-                if (airiOutput.createdTask) {
-                    // IMPORTANT: airiChat now returns a PrioritizedTask with a Date object
-                    const newTask: PrioritizedTask = airiOutput.createdTask;
-
-                     // Basic validation (ID, Name, valid Date object)
-                     if (newTask.id && newTask.name && newTask.dueDate && isValid(newTask.dueDate)) {
-                         setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => {
-                             const prioA = a.priority ?? Infinity;
-                             const prioB = b.priority ?? Infinity;
-                             if (prioA !== prioB) return prioA - prioB;
-                             return a.dueDate.getTime() - b.dueDate.getTime();
-                         }));
-                         newAiriMessage.taskData = newTask; // Attach the full task data to the message
-                         toast({
-                             title: `✅ Airi added task: ${newTask.name}`,
-                             description: `Due: ${format(newTask.dueDate, 'Pp')}`,
-                         });
-                     } else {
-                         console.warn("[TaskManager] Airi returned an invalid task structure or date:", newTask);
-                         // Add a note to Airi's response if it doesn't already mention the failure
-                         if (!newAiriMessage.text.includes("couldn't add the task") && !newAiriMessage.text.includes("messed up")) {
-                           newAiriMessage.text += " (But I couldn't add the task, the details were wrong or the date was invalid.)";
-                           speakText(" (But I couldn't add the task, the details were wrong or the date was invalid.)"); // Speak the addendum
-                         }
-                         toast({
-                            title: 'Task Creation Issue',
-                            description: 'Airi tried to add a task, but the details were incomplete or invalid.',
-                            variant: 'destructive',
-                         });
-                     }
-                }
-
-                // Handle prioritized tasks
-                if (airiOutput.prioritizedTasks && airiOutput.prioritizedTasks.length > 0) {
-                     // airiOutput.prioritizedTasks is already PrioritizedTaskData[]
-                     const priorityUpdates = airiOutput.prioritizedTasks;
-                     const priorityMap = new Map(priorityUpdates.map(p => [p.id, p])); // Use ID as key
-                     let tasksUpdatedCount = 0;
-
-                     const updatedTasks = tasks.map(task => {
-                         const priorityData = priorityMap.get(task.id);
-                         // Update only if priority data exists AND task is not completed
-                         if (priorityData && !task.completed) {
-                             tasksUpdatedCount++;
-                             return { ...task, priority: priorityData.priority, reason: priorityData.reason };
-                         }
-                         // Return unchanged task if no update or if completed
-                         return task;
-                     }).sort((a, b) => { // Re-sort based on new priorities
-                         const priorityA = a.priority ?? Infinity;
-                         const priorityB = b.priority ?? Infinity;
-                         if (priorityA !== priorityB) return priorityA - priorityB;
-                         const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
-                         const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
-                         return dateA - dateB;
-                     });
-
-                     if (tasksUpdatedCount > 0) {
-                         setTasks(updatedTasks);
-                         newAiriMessage.taskData = priorityUpdates; // Attach the priority data array
-                         toast({
-                             title: '✨ Airi prioritized your tasks!',
-                             description: `Updated priorities for ${tasksUpdatedCount} task(s).`,
-                         });
-                     } else {
-                         console.warn("[TaskManager] Airi returned prioritization data, but no matching incomplete tasks were found or updated.");
-                     }
-                 }
-           }
-
-          // Add Airi's message (normal or error) to the chat
-          setChatMessages((prev) => [...prev, newAiriMessage]);
-
-      } catch (error: any) {
-          console.error('Error communicating with Airi:', error);
-          const errorResponseMessage: ChatMessage = {
-              id: crypto.randomUUID(),
-              sender: 'airi',
-              text: "Hmph. Something went seriously wrong trying to reach me. Check the console or try again later.",
-              timestamp: new Date(),
-              isError: true,
-          };
-          speakText(errorResponseMessage.text); // Speak the critical error
-          setChatMessages((prev) => [...prev, errorResponseMessage]);
-          toast({
-              title: 'Chat Connection Error',
-              description: error.message || 'Could not get a response from Airi.',
-              variant: 'destructive',
-          });
-      } finally {
-          setIsLoadingAI(false); // Ensure loading state is reset
-           // Refocus input field after processing
-          setTimeout(() => chatInputFieldRef.current?.focus(), 0);
+      // 1. Task Creation
+      if (airiOutput.createdTask) {
+          const newTaskFromAiri = airiOutput.createdTask as AiriCreatedTask; // Use imported type
+          console.log("Airi reported task creation:", newTaskFromAiri);
+          // Ensure dueDate is valid before adding
+          const parsedDueDate = parseISO(newTaskFromAiri.dueDate);
+          if (isValid(parsedDueDate)) {
+              const newTask: PrioritizedTask = {
+                  id: newTaskFromAiri.id,
+                  name: newTaskFromAiri.name,
+                  description: newTaskFromAiri.description,
+                  dueDate: parsedDueDate, // Convert ISO string back to Date object
+                  category: newTaskFromAiri.category,
+                  completed: newTaskFromAiri.completed,
+                  priority: newTaskFromAiri.priority,
+                  reason: newTaskFromAiri.reason,
+              };
+              setTasks((prevTasks) => [newTask, ...prevTasks]); // Add to the top
+              toast({
+                  title: "Airi Added a Task",
+                  description: `"${newTask.name}" was created. It wasn't *that* hard.`,
+              });
+          } else {
+              console.warn("Airi created a task with an invalid date:", newTaskFromAiri);
+              toast({
+                  title: "Airi Task Error",
+                  description: "Airi tried to add a task, but messed up the date. Typical.",
+                  variant: "destructive",
+              });
+          }
       }
-  };
 
-  // --- Task Form Submission (Keep as before) ---
-  async function onSubmit(data: TaskFormData) {
-    let finalDueDate = data.dueDate;
-    // Ensure date is valid before creating task
-    if (!finalDueDate || !isValid(finalDueDate)) {
-        toast({ title: "Invalid Date", description: "Please select a valid due date and time.", variant: "destructive" });
-        console.error("Form submission prevented due to invalid date:", data.dueDate);
-        return; // Prevent submission
+      // 2. Task Prioritization
+      if (airiOutput.prioritizedTasks && airiOutput.prioritizedTasks.length > 0) {
+          const priorities: AiriPrioritizedTaskData[] = airiOutput.prioritizedTasks;
+          console.log("Priorities received from Airi:", priorities); // Log received data
+
+          setTasks(prevTasks => {
+              const updatedTasks = prevTasks.map(task => {
+                  // Find the corresponding priority data from Airi's output using the ID
+                  const priorityData = priorities.find(p => p.id === task.id);
+
+                  if (priorityData) {
+                      console.log(`Updating priority for task ${task.id} (${task.name}):`, priorityData);
+                      return {
+                          ...task,
+                          priority: priorityData.priority,
+                          reason: priorityData.reason,
+                      };
+                  }
+                  // If no priority data found for this task, reset its priority/reason
+                  // Or decide to keep existing priority if that's desired behavior
+                  return {
+                      ...task,
+                      priority: undefined, // Reset if not prioritized in this batch
+                      reason: undefined,
+                  };
+              });
+
+              console.log("Tasks after priority update:", updatedTasks);
+              return updatedTasks;
+          });
+
+          toast({
+              title: "Airi Prioritized Tasks",
+              description: "Hmph. Fine, I prioritized them. Now get to work.",
+          });
+      }
+
+
+      if (!airiOutput.success) {
+         console.error("Airi flow reported failure:", airiOutput.error);
+        toast({
+          title: "Airi Error",
+          description: airiOutput.error || "Something went wrong, according to Airi.",
+          variant: "destructive",
+        });
+      }
+
+    } catch (error: any) {
+      console.error('Critical Error interacting with Airi:', error);
+       const errorMessage = `Hmph. My circuits are fried or something. (${error.message || 'Unknown error'}) Try again, maybe?`;
+       // Add error to chat for visibility
+       setChatMessages((prev) => [...prev, { role: 'system', content: `System Error: ${error.message}` }]);
+       speakText("Hmph. My circuits are fried or something. Try again, maybe?"); // Speak error
+       toast({
+           title: 'Airi Communication Error',
+           description: 'Could not reach Airi. Check console for details.',
+           variant: 'destructive',
+       });
+    } finally {
+      setIsAiLoading(false);
     }
-    const newTask: PrioritizedTask = {
-      id: crypto.randomUUID(),
-      name: data.name, description: data.description, dueDate: finalDueDate,
-      category: data.category, completed: false,
-    };
-    setTasks((prevTasks) => [...prevTasks, newTask].sort((a, b) => { // Sort on add
-       const prioA = a.priority ?? Infinity;
-       const prioB = b.priority ?? Infinity;
-       if (prioA !== prioB) return prioA - prioB;
-       return a.dueDate.getTime() - b.dueDate.getTime();
-    }));
-    form.reset({ name: '', description: '', dueDate: undefined, category: 'goal' }); // Reset with undefined date
-    toast({ title: "Task Added", description: `"${data.name}" added. Due: ${format(finalDueDate, 'Pp')}` });
-  }
-
-  // --- deleteTask & toggleTaskCompletion (Keep as before) ---
-  const deleteTask = (id: string) => {
-    const taskToDelete = tasks.find(task => task.id === id);
-    setTasks(tasks.filter((task) => task.id !== id));
-    toast({ title: 'Task Deleted', description: `"${taskToDelete?.name}" removed.`, variant: 'destructive' });
   };
 
-  const toggleTaskCompletion = (id: string) => {
-    let toggledTaskName = '';
-    let isNowCompleted: boolean | undefined = undefined;
-    setTasks(prevTasks =>
-      prevTasks.map((task) => {
-        if (task.id === id) {
-            toggledTaskName = task.name;
-            isNowCompleted = !task.completed;
-             // Reset priority/reason when completing, keep when un-completing
-            const priorityUpdates = isNowCompleted ? { priority: undefined, reason: undefined } : {};
-            return { ...task, completed: !task.completed, ...priorityUpdates };
+
+    // --- Speech Recognition Handling ---
+    React.useEffect(() => {
+        if (!SpeechRecognition) {
+            console.warn("Speech recognition not supported in this browser.");
+            return;
         }
-        return task;
-      }).sort((a, b) => { // Re-sort after toggling completion
-          const priorityA = a.priority ?? Infinity;
-          const priorityB = b.priority ?? Infinity;
-          if (priorityA !== priorityB) return priorityA - priorityB;
-          const dateA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
-          const dateB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
-          return dateA - dateB;
-      })
-    );
-    if (toggledTaskName && isNowCompleted !== undefined) {
-         toast({ title: isNowCompleted ? 'Task Completed! 🎉' : 'Task Marked Incomplete', description: `"${toggledTaskName}" status updated.` });
-     }
-  };
 
-  // --- Task List Filtering (Keep as before) ---
-  const incompleteTasks = tasks.filter(task => !task.completed);
-  const completedTasks = tasks.filter(task => task.completed);
-  const goals = incompleteTasks.filter(task => task.category === 'goal');
-  const chores = incompleteTasks.filter(task => task.category === 'chore');
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false; // Process single utterances
+        recognition.lang = 'en-US'; // Set language
+        recognition.interimResults = false; // Only final results
 
-  // --- Task List Rendering (Keep as before, slight adjustments maybe) ---
-  const renderTaskList = (taskList: PrioritizedTask[], title: string) => (
-    <Card className="mb-6 shadow-md hover:shadow-lg transition-shadow duration-200">
-      <CardHeader>
-        <CardTitle className="text-xl flex items-center">
-            {title.includes('Goals') && '🎯 '} {title.includes('Chores') && '🧹 '} {title.includes('Completed') && '✅ '}
-           {title} <Badge variant="secondary" className="ml-2">{taskList.length}</Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {isLoadingTasks ? (
-          <div className="space-y-4">
-              <Skeleton className="h-20 w-full" />
-              <Skeleton className="h-20 w-full" />
-          </div>
-        ) : taskList.length === 0 ? (
-           <p className="text-muted-foreground italic text-center py-4">
-                {title.includes('Completed') ? 'No tasks completed yet.' : `No ${title.toLowerCase()} found.`}
-           </p>
-        ) : (
-          <ul className="space-y-3">
-            {taskList.map((task) => {
-               const isDueDateValid = task.dueDate && isValid(task.dueDate);
-               const formattedDueDate = isDueDateValid ? format(task.dueDate, 'Pp') : 'Invalid Date';
-               const isTaskOverdue = isDueDateValid && isPast(task.dueDate) && !task.completed;
-               return (
-                <li key={task.id} className={cn("flex items-start md:items-center justify-between p-4 rounded-lg border transition-all duration-200 group", task.completed ? 'bg-secondary/30 border-dashed opacity-70' : 'bg-card hover:bg-accent/40 hover:border-primary/50', isTaskOverdue ? 'border-destructive shadow-sm shadow-destructive/20' : 'border-border')}>
-                  <div className="flex items-start space-x-4 flex-grow mr-2 overflow-hidden">
-                     <input type="checkbox" checked={task.completed} onChange={() => toggleTaskCompletion(task.id)} className="form-checkbox h-6 w-6 text-primary rounded-md border-gray-300 focus:ring-primary cursor-pointer mt-1 shrink-0" aria-label={`Mark task ${task.name} as ${task.completed ? 'incomplete' : 'complete'}`} />
-                    <div className="flex-grow overflow-hidden pt-0.5">
-                      <span className={cn("block font-semibold text-base truncate", task.completed ? 'line-through text-muted-foreground/80' : 'text-foreground')} title={task.name}>
-                        {task.name}
-                         {task.priority && !task.completed && ( <Badge variant={task.priority <= 2 ? "destructive" : task.priority <= 5 ? "default" : "secondary"} className="ml-2 align-middle text-xs cursor-help" title={task.reason ? `Priority Reason: ${task.reason}` : `Priority: ${task.priority}`}>🔥 P{task.priority}</Badge> )}
-                      </span>
-                       <span className={cn("block text-sm mt-1 truncate", task.completed ? 'text-muted-foreground/60 line-through' : 'text-muted-foreground')} title={task.description}> {task.description} </span>
-                      <div className={cn("text-xs mt-2 flex items-center gap-2 flex-wrap", task.completed ? 'text-muted-foreground/60' : 'text-muted-foreground')}>
-                        <span className={cn("flex items-center gap-1", isTaskOverdue && !task.completed ? "text-destructive font-medium" : "")}><CalendarIcon className="h-3 w-3" />Due: {formattedDueDate}</span>
-                        {isTaskOverdue && (<Badge variant="destructive" className="text-xs px-1.5 py-0.5">🚨 Overdue</Badge>)}
-                         <Badge variant="outline" className={cn("capitalize text-xs px-1.5 py-0.5", task.completed && "opacity-60")}>{task.category}</Badge>
-                      </div>
-                      {task.reason && !task.completed && (
-                          <p className="text-xs mt-1.5 text-amber-700 dark:text-amber-500 italic pl-1">💡 Reason: {task.reason}</p>
-                      )}
-                    </div>
-                  </div>
-                   <AlertDialog>
-                     <AlertDialogTrigger asChild><Button variant="ghost" size="icon" className={cn("text-muted-foreground hover:text-destructive shrink-0 transition-opacity duration-200", task.completed ? "opacity-50" : "opacity-70 group-hover:opacity-100")}> <Trash2 className="h-4 w-4" /> <span className="sr-only">Delete Task</span> </Button></AlertDialogTrigger>
-                     <AlertDialogContent>
-                       <AlertDialogHeader> <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle> <AlertDialogDescription> This action cannot be undone. This will permanently delete the task <strong className="px-1">{task.name}</strong> due on <strong className="px-1">{formattedDueDate}</strong>. </AlertDialogDescription> </AlertDialogHeader>
-                       <AlertDialogFooter> <AlertDialogCancel>Cancel</AlertDialogCancel> <AlertDialogAction onClick={() => deleteTask(task.id)} className={buttonVariants({ variant: "destructive"})}> Yes, Delete Task </AlertDialogAction> </AlertDialogFooter>
-                     </AlertDialogContent>
-                   </AlertDialog>
-                </li>
-            ); })}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
-  );
+        recognition.onresult = (event: any) => {
+            const transcript = event.results[0][0].transcript;
+            console.log("Voice input transcript:", transcript);
+            airiChatForm.setValue('message', transcript); // Set transcript in input
+            // Automatically submit the form after transcript is received
+            airiChatForm.handleSubmit(onSubmitAiriChat)();
+            setIsListening(false); // Stop listening animation
+        };
+
+        recognition.onerror = (event: any) => {
+            console.error('Speech recognition error:', event.error);
+            let errorMsg = 'Speech recognition error. Please try again.';
+            if (event.error === 'no-speech') {
+                errorMsg = 'No speech detected. Did you say something?';
+            } else if (event.error === 'audio-capture') {
+                errorMsg = 'Microphone error. Ensure it\'s connected and permission is granted.';
+            } else if (event.error === 'not-allowed') {
+                errorMsg = 'Microphone permission denied. Please allow access in browser settings.';
+            } else if (event.error === 'network') {
+                 errorMsg = 'Network error during speech recognition. Check your connection.';
+             }
+            toast({
+                title: 'Voice Input Error',
+                description: errorMsg,
+                variant: 'destructive',
+            });
+            setIsListening(false); // Stop listening animation
+        };
+
+        recognition.onend = () => {
+            // Don't automatically turn off listening state here if using manual toggle
+            // setIsListening(false);
+        };
+
+        recognitionRef.current = recognition;
+
+        // Cleanup function
+        return () => {
+            if (recognitionRef.current) {
+                recognitionRef.current.abort(); // Stop recognition if component unmounts
+            }
+        };
+    }, [airiChatForm, toast]); // Add dependencies
 
 
- return (
-    <div className="container mx-auto p-4 md:p-6 lg:p-8 max-w-4xl">
-      <header className="mb-8 flex flex-col sm:flex-row items-center justify-between gap-4 border-b pb-4">
-        <div className="flex items-center gap-2">
-           <h1 className="text-3xl font-bold text-primary flex items-center gap-2">
-             {/* Simple Hashtag/Grid icon */}
-             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-7 h-7"><path d="M10 3L4 9M14 3l6 6M3 10v10c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V10M17 14l-5 5-5-5M12 19V9"/></svg>
-             TaskMaster
-           </h1>
-        </div>
-        <div className="flex items-center space-x-3">
+    const toggleListening = () => {
+        if (!recognitionRef.current) {
+            toast({ title: "Voice Input Not Ready", description: "Speech recognition is not available or hasn't initialized.", variant: "destructive"});
+            return;
+        }
 
-         {/* Airi Chat Button */}
-         <Sheet open={isChatOpen} onOpenChange={setIsChatOpen}>
-              <SheetTrigger asChild>
-                  <Button variant="outline">
-                      <Bot className="mr-2 h-5 w-5" /> Ask Airi
-                  </Button>
-              </SheetTrigger>
-              {/* Adjust side and potentially width constraints */}
-              <SheetContent className="w-full max-w-lg flex flex-col p-0" side="right">
-                 <SheetHeader className="p-6 pb-4 border-b flex flex-row justify-between items-center"> {/* Added flex for layout */}
-                      <div> {/* Container for title and description */}
-                          <SheetTitle className="flex items-center gap-2 text-xl">
-                              <Bot className="h-6 w-6 text-primary" /> Chat with Airi
-                          </SheetTitle>
-                          <SheetDescription>
-                             Your tsundere assistant for tasks, motivation, and advice.
-                          </SheetDescription>
-                      </div>
-                       {/* TTS Toggle Button */}
-                      <Button
-                           variant="ghost"
-                           size="icon"
-                           onClick={() => {
-                              setIsTTSEnabled((prev) => !prev);
-                              if (isTTSEnabled) window.speechSynthesis.cancel(); // Stop speaking if disabling
-                           }}
-                           title={isTTSEnabled ? "Mute Airi's voice" : "Unmute Airi's voice"}
-                       >
-                           {isTTSEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5 text-muted-foreground" />}
-                           <span className="sr-only">{isTTSEnabled ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}</span>
-                      </Button>
-                 </SheetHeader>
-                  {/* Chat Messages Area */}
-                  <ScrollArea className="flex-grow p-4" viewportRef={chatScrollAreaRef}> {/* Use viewportRef */}
-                     <div className="space-y-4 pb-4"> {/* Add padding bottom */}
-                         {/* Initial message from Airi */}
-                         {chatMessages.length === 0 && (
-                            <div className={cn("flex items-end gap-2 justify-start")}>
-                                <Bot className="h-6 w-6 text-primary shrink-0 mb-1" />
-                                <div className={cn("rounded-lg p-3 max-w-[80%]", 'bg-muted text-muted-foreground')}>
-                                    <p className="text-sm">Hmph. What do you want? Ask me something, I guess.</p>
-                                    <p className="text-xs mt-1 opacity-70 text-right">{format(new Date(), 'p')}</p>
-                                </div>
+        if (isListening) {
+            recognitionRef.current.stop();
+            setIsListening(false);
+            console.log("Speech recognition stopped.");
+        } else {
+            try {
+                recognitionRef.current.start();
+                setIsListening(true);
+                console.log("Speech recognition started.");
+                // Clear the input field when starting to listen
+                airiChatForm.setValue('message', '');
+            } catch (error: any) {
+                 console.error("Failed to start speech recognition:", error);
+                 let errorMsg = "Could not start voice input.";
+                 if (error.name === 'NotAllowedError') {
+                     errorMsg = 'Microphone permission denied. Please allow access.';
+                 } else if (error.name === 'InvalidStateError') {
+                     // This can happen if start() is called while already running
+                     // Try stopping first, then starting again might be a recovery strategy
+                     try {
+                         recognitionRef.current.stop(); // Attempt to stop
+                         recognitionRef.current.start(); // Try starting again
+                         setIsListening(true);
+                         console.log("Restarted speech recognition after InvalidStateError.");
+                     } catch (retryError) {
+                         console.error("Failed to restart speech recognition:", retryError);
+                         toast({ title: "Voice Input Error", description: errorMsg, variant: "destructive"});
+                         setIsListening(false);
+                     }
+                 } else {
+                     toast({ title: "Voice Input Error", description: errorMsg, variant: "destructive"});
+                     setIsListening(false);
+                 }
+            }
+        }
+    };
+
+
+
+  // --- Task Filtering and Sorting ---
+  const sortedTasks = React.useMemo(() => {
+    return [...tasks].sort((a, b) => {
+      // Sort by completion status (incomplete first)
+      if (a.completed !== b.completed) {
+        return a.completed ? 1 : -1;
+      }
+      // Then sort by priority (lower number = higher priority)
+      if (a.priority !== undefined && b.priority !== undefined) {
+        if (a.priority !== b.priority) {
+          return a.priority - b.priority;
+        }
+      } else if (a.priority !== undefined) {
+        return -1; // Prioritized tasks before unprioritized
+      } else if (b.priority !== undefined) {
+        return 1; // Unprioritized tasks after prioritized
+      }
+      // Then sort by due date (earlier first)
+      return (a.dueDate?.getTime() || 0) - (b.dueDate?.getTime() || 0);
+    });
+  }, [tasks]);
+
+  const pendingTasks = React.useMemo(() => sortedTasks.filter(task => !task.completed), [sortedTasks]);
+  const completedTasks = React.useMemo(() => sortedTasks.filter(task => task.completed), [sortedTasks]);
+
+
+  // --- Render ---
+  return (
+    <div className="flex h-screen bg-background">
+      {/* Main Task Area */}
+      <div className="flex-1 flex flex-col p-4 md:p-6 lg:p-8 overflow-hidden">
+        {/* Header */}
+        <header className="flex items-center justify-between mb-6 border-b pb-4">
+          <h1 className="text-3xl font-bold text-primary flex items-center gap-2">
+            <CheckCircle className="w-7 h-7" /> TaskMaster
+          </h1>
+          <div className="flex items-center gap-2">
+             {/* Chatbot Trigger */}
+             <Sheet open={isChatOpen} onOpenChange={setIsChatOpen}>
+                <SheetTrigger asChild>
+                   <Button variant="outline" size="sm" className="gap-1.5">
+                     <Sparkles className="w-4 h-4" />
+                     Airi Assistant
+                   </Button>
+                </SheetTrigger>
+                 <SheetContent className="w-full max-w-lg flex flex-col p-0"> {/* Adjust width and remove padding */}
+                    <SheetHeader className="p-6 pb-2">
+                      <SheetTitle>Chat with Airi</SheetTitle>
+                      <SheetDescription>
+                        Your tsundere assistant for tasks, motivation, and advice.
+                      </SheetDescription>
+                    </SheetHeader>
+                    {/* Chat Message Area */}
+                    <ScrollArea className="flex-1 px-6 py-4 bg-muted/40" viewportRef={chatScrollAreaRef}>
+                      <div className="space-y-4">
+                         {/* Welcome Message */}
+                        {chatMessages.length === 0 && (
+                          <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground italic justify-center">
+                            <Sparkles className="w-5 h-5 text-primary shrink-0" />
+                            <span>What do you want? Don't waste my time...</span>
+                          </div>
+                        )}
+                        {chatMessages.map((msg, index) => (
+                          <div
+                            key={index}
+                            className={cn(
+                              "flex items-end gap-2 text-sm",
+                              msg.role === 'user' ? 'justify-end' : 'justify-start'
+                            )}
+                          >
+                            {msg.role === 'airi' && <Sparkles className="w-5 h-5 text-primary shrink-0 mb-1" />}
+                            {msg.role === 'system' && (
+                               <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-destructive shrink-0 mb-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                              </svg>
+                            )}
+                            <div
+                              className={cn(
+                                "p-3 rounded-lg max-w-[85%]", // Increased max width slightly
+                                msg.role === 'user'
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-background border',
+                                msg.role === 'system' && 'bg-destructive/10 border border-destructive/30 text-destructive dark:text-red-400' // Distinct system message style
+                              )}
+                            >
+                              {/* Basic markdown rendering for lists/bold */}
+                              {msg.content.split('\n').map((line, lineIndex) => (
+                                <p key={lineIndex} className="my-0.5" dangerouslySetInnerHTML={{
+                                    __html: line
+                                      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+                                      .replace(/^- (.*)/gm, '<span class="ml-4 block">&bull; $1</span>') // Basic list item
+                                      .replace(/^(\d+)\. (.*)/gm, '<span class="ml-4 block">$1. $2</span>') // Basic numbered list
+                                 }} />
+                              ))}
+
+                               {/* Timestamp (Optional) */}
+                               {/* <span className="block text-xs text-muted-foreground/70 mt-1 text-right">
+                                   {format(new Date(), 'p')}
+                               </span> */}
                             </div>
+                             {msg.role === 'user' && (
+                               <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-muted-foreground shrink-0 mb-1" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                               </svg>
+                             )}
+                          </div>
+                        ))}
+                         {isAiLoading && (
+                           <div className="flex justify-start items-center gap-2 p-3">
+                              <Sparkles className="w-5 h-5 text-primary shrink-0 animate-pulse" />
+                              {/* Simple "Thinking..." text */}
+                             <span className="text-sm text-muted-foreground italic">Airi is thinking...</span>
+                              {/* Optional: Skeleton lines */}
+                             {/* <div className="space-y-1">
+                                 <Skeleton className="h-3 w-24" />
+                                 <Skeleton className="h-3 w-16" />
+                             </div> */}
+                           </div>
                          )}
-                          {chatMessages.map((msg) => (
-                              <div key={msg.id} className={cn("flex items-end gap-2", msg.sender === 'user' ? 'justify-end' : 'justify-start')}>
-                                  {msg.sender === 'airi' && <Bot className="h-6 w-6 text-primary shrink-0 mb-1" />}
-                                  <div className={cn(
-                                      "rounded-lg p-3 max-w-[85%]", // Increased max width slightly
-                                      msg.sender === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
-                                      msg.isError && msg.sender === 'airi' ? 'bg-destructive/20 text-destructive-foreground border border-destructive' : '' // Style for errors
-                                      )}>
-                                      <p className="text-sm whitespace-pre-wrap">{msg.text}</p> {/* Allow wrapping */}
-                                      <p className="text-xs mt-1 opacity-70 text-right">{format(msg.timestamp, 'p')}</p>
-                                  </div>
-                                   {msg.sender === 'user' && <User className="h-6 w-6 text-muted-foreground shrink-0 mb-1" />}
-                              </div>
-                          ))}
-                          {isLoadingAI && (
-                              <div className="flex items-center gap-2 justify-start">
-                                  <Bot className="h-6 w-6 text-primary shrink-0 animate-pulse" />
-                                  <Skeleton className="h-10 w-20 rounded-lg bg-muted" />
-                              </div>
-                          )}
-                     </div>
-                  </ScrollArea>
-                  {/* Chat Input Area */}
-                  <SheetFooter className="p-4 border-t bg-background">
-                      <form onSubmit={handleChatSubmit} className="flex items-center gap-2 w-full">
-                          <Input
-                              ref={chatInputFieldRef} // Add ref
-                              type="text"
-                              placeholder="Ask Airi..."
-                              value={chatInput}
-                              onChange={(e) => setChatInput(e.target.value)}
-                              disabled={isLoadingAI}
-                              className="flex-grow"
-                              autoComplete="off"
+                      </div>
+                    </ScrollArea>
+                    {/* Chat Input Area */}
+                    <SheetFooter className="p-4 border-t bg-background">
+                      <Form {...airiChatForm}>
+                        <form
+                          onSubmit={airiChatForm.handleSubmit(onSubmitAiriChat)}
+                          className="flex items-center gap-2 w-full"
+                        >
+                          <FormField
+                            control={airiChatForm.control}
+                            name="message"
+                            render={({ field }) => (
+                              <FormItem className="flex-1">
+                                <FormControl>
+                                  <Input
+                                    placeholder="Ask Airi something... (e.g., 'Add task: Buy milk tomorrow at 5 PM' or 'Prioritize my tasks')"
+                                    {...field}
+                                    disabled={isAiLoading || isListening}
+                                    autoComplete="off"
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
                           />
-                          <Button type="submit" size="icon" disabled={isLoadingAI || !chatInput.trim()}>
-                              {isLoadingAI ? <Sparkles className="h-5 w-5 animate-spin" /> : <SendHorizontal className="h-5 w-5" />}
-                              <span className="sr-only">Send message</span>
+                          {SpeechRecognition && ( // Conditionally render mic button
+                               <TooltipProvider delayDuration={100}>
+                                 <Tooltip>
+                                   <TooltipTrigger asChild>
+                                      <Button
+                                         type="button"
+                                         variant="ghost"
+                                         size="icon"
+                                         onClick={toggleListening}
+                                         disabled={isAiLoading}
+                                         className={cn("shrink-0", isListening && "text-destructive animate-pulse ring-2 ring-destructive/50 rounded-full")}
+                                       >
+                                         {isListening ? <MicOff /> : <Mic />}
+                                         <span className="sr-only">{isListening ? 'Stop Listening' : 'Start Listening'}</span>
+                                       </Button>
+                                   </TooltipTrigger>
+                                   <TooltipContent>
+                                      {isListening ? 'Stop Listening' : 'Start Listening'}
+                                   </TooltipContent>
+                                 </Tooltip>
+                               </TooltipProvider>
+                           )}
+                            <TooltipProvider delayDuration={100}>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => setIsTTSEnabled(prev => !prev)}
+                                            className="shrink-0"
+                                        >
+                                            {isTTSEnabled ? <Volume2 /> : <VolumeX />}
+                                            <span className="sr-only">{isTTSEnabled ? 'Disable TTS' : 'Enable TTS'}</span>
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        {isTTSEnabled ? 'Disable Text-to-Speech' : 'Enable Text-to-Speech'}
+                                    </TooltipContent>
+                                </Tooltip>
+                            </TooltipProvider>
+                          <Button type="submit" size="icon" disabled={isAiLoading || isListening} className="shrink-0">
+                            <Send />
+                            <span className="sr-only">Send message</span>
                           </Button>
-                      </form>
-                  </SheetFooter>
-              </SheetContent>
-         </Sheet>
-
-          {/* Force Mode Switch (Keep as before) */}
-          <div className="flex items-center space-x-2 p-2 rounded-md bg-secondary/50 border">
-             <Zap className={`h-5 w-5 transition-colors ${forceMode ? 'text-destructive animate-pulse' : 'text-muted-foreground/80'}`} />
-             <Label htmlFor="force-mode" className={cn("text-sm font-medium cursor-pointer", forceMode ? 'text-destructive' : 'text-muted-foreground')}> Force Mode </Label>
-             <Switch id="force-mode" checked={forceMode} onCheckedChange={setForceMode} aria-label="Toggle force mode (persistent reminders)" className="data-[state=checked]:bg-destructive" />
-           </div>
-        </div>
-      </header>
-
-       {/* Task Form (Keep as before) */}
-      <Card className="mb-8 shadow-md border border-primary/20">
-        <CardHeader><CardTitle className="text-xl">Add New Task</CardTitle></CardHeader>
-        <CardContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-             <FormField control={form.control} name="name" render={({ field }) => ( <FormItem><FormLabel>Task Name</FormLabel><FormControl><Input placeholder="e.g., Finish project report" {...field} /></FormControl><FormMessage /></FormItem> )} />
-              <FormField control={form.control} name="description" render={({ field }) => ( <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea placeholder="e.g., Include Q3 data, proofread, and send to manager..." {...field} rows={3} /></FormControl><FormMessage /></FormItem> )} />
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 {/* Updated DateTimePicker usage */}
-                 <FormField
-                      control={form.control}
-                      name="dueDate"
+                        </form>
+                      </Form>
+                    </SheetFooter>
+                 </SheetContent>
+             </Sheet>
+            {/* Add/Edit Task Dialog Trigger */}
+            <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: new Date(), dueTime: '', category: 'goal'}); setIsEditDialogOpen(true); }}>
+                  <Plus className="w-4 h-4" />
+                  Add Task
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-[480px]">
+                <DialogHeader>
+                  <DialogTitle>{editingTask ? 'Edit Task' : 'Add New Task'}</DialogTitle>
+                  <DialogDescription>
+                    {editingTask ? 'Update the details of your task.' : 'Fill in the details for your new task.'}
+                  </DialogDescription>
+                </DialogHeader>
+                <Form {...taskForm}>
+                  <form onSubmit={taskForm.handleSubmit(onSubmitTask)} className="space-y-4 pt-2">
+                    {/* Task Name */}
+                    <FormField
+                      control={taskForm.control}
+                      name="name"
                       render={({ field }) => (
-                        <FormItem className="flex flex-col">
-                          <FormLabel>Due Date & Time</FormLabel>
-                           <DateTimePicker
-                               value={field.value}
-                               onChange={field.onChange}
-                               disabled={(date) => date < startOfDay(new Date())}
-                           />
+                        <FormItem>
+                          <FormLabel>Task Name</FormLabel>
+                          <FormControl>
+                            <Input placeholder="e.g., Finish project report" {...field} />
+                          </FormControl>
                           <FormMessage />
                         </FormItem>
                       )}
-                  />
-                    <FormField control={form.control} name="category" render={({ field }) => ( <FormItem><FormLabel>Category</FormLabel><FormControl>
-                              <div className="flex space-x-4 pt-2">
-                                <Label htmlFor="goal-radio" className={cn( "flex items-center space-x-2 cursor-pointer rounded-md border p-3 transition-colors hover:bg-accent", field.value === 'goal' && "bg-primary/10 border-primary" )}>
-                                  <FormControl><input type="radio" id="goal-radio" value="goal" checked={field.value === 'goal'} onChange={() => field.onChange('goal')} className="form-radio h-4 w-4 text-primary focus:ring-primary cursor-pointer" /></FormControl>
-                                  <span className="font-medium">🎯 Goal</span>
-                                </Label>
-                                <Label htmlFor="chore-radio" className={cn( "flex items-center space-x-2 cursor-pointer rounded-md border p-3 transition-colors hover:bg-accent", field.value === 'chore' && "bg-primary/10 border-primary" )}>
-                                  <FormControl><input type="radio" id="chore-radio" value="chore" checked={field.value === 'chore'} onChange={() => field.onChange('chore')} className="form-radio h-4 w-4 text-primary focus:ring-primary cursor-pointer" /></FormControl>
-                                   <span className="font-medium">🧹 Chore</span>
-                                </Label>
-                              </div>
-                            </FormControl><FormMessage /></FormItem> )} />
-              </div>
-              <div className="flex justify-end"><Button type="submit" size="lg">Add Task</Button></div>
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
+                    />
+                    {/* Task Description */}
+                    <FormField
+                      control={taskForm.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description (Optional)</FormLabel>
+                          <FormControl>
+                            <Textarea placeholder="Add more details..." {...field} rows={3} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    {/* Due Date & Time Combined Input */}
+                     <div className="flex flex-col gap-2">
+                       <FormLabel>Due Date & Time</FormLabel>
+                         <div className="flex flex-col sm:flex-row gap-2">
+                             {/* Date Picker */}
+                             <FormField
+                               control={taskForm.control}
+                               name="dueDate"
+                               render={({ field }) => (
+                                 <FormItem className="flex flex-col flex-1">
+                                   {/* <FormLabel>Date</FormLabel> */}
+                                   <Popover>
+                                     <PopoverTrigger asChild>
+                                       <FormControl>
+                                         <Button
+                                           variant={"outline"}
+                                           className={cn(
+                                             "w-full justify-start text-left font-normal",
+                                             !field.value && "text-muted-foreground"
+                                           )}
+                                         >
+                                           <CalendarIcon className="mr-2 h-4 w-4" />
+                                           {field.value ? format(field.value, 'PPP') : <span>Pick a date</span>}
+                                         </Button>
+                                       </FormControl>
+                                     </PopoverTrigger>
+                                     <PopoverContent className="w-auto p-0" align="start">
+                                       <Calendar
+                                         mode="single"
+                                         selected={field.value}
+                                         onSelect={field.onChange}
+                                         disabled={(date) => date < startOfDay(new Date())} // Disable past dates
+                                         initialFocus
+                                       />
+                                     </PopoverContent>
+                                   </Popover>
+                                   <FormMessage className="mt-1" /> {/* Ensure message shows below */}
+                                 </FormItem>
+                               )}
+                             />
+                             {/* Time Input (AM/PM) */}
+                             <FormField
+                                 control={taskForm.control}
+                                 name="dueTime"
+                                 render={({ field }) => (
+                                   <FormItem className="flex flex-col w-full sm:w-[150px]">
+                                     {/* <FormLabel>Time</FormLabel> */}
+                                     <div className="relative">
+                                         <Clock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                         <FormControl>
+                                            {/* Use text input for HH:MM AM/PM */}
+                                            <Input
+                                                placeholder="hh:mm AM/PM"
+                                                className="pl-10"
+                                                {...field}
+                                                // Optional: Add pattern for direct validation, though regex in schema handles it
+                                                // pattern="(0?[1-9]|1[0-2]):[0-5]\d (AM|PM)"
+                                             />
+                                         </FormControl>
+                                      </div>
+                                     <FormMessage className="mt-1" /> {/* Ensure message shows below */}
+                                   </FormItem>
+                                 )}
+                               />
+                         </div>
+                     </div>
 
-       {/* Task Lists (Keep as before) */}
-       <div className="space-y-8">
-          {renderTaskList(goals, 'Current Goals')}
-          {renderTaskList(chores, 'Current Chores')}
-          {completedTasks.length > 0 && renderTaskList(completedTasks, 'Completed Tasks')}
+
+                    {/* Category */}
+                    <FormField
+                      control={taskForm.control}
+                      name="category"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Category</FormLabel>
+                          <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select a category" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="goal">Goal (Important)</SelectItem>
+                              <SelectItem value="chore">Chore (Routine)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <DialogFooter className="pt-4">
+                      <DialogClose asChild>
+                         <Button type="button" variant="outline">Cancel</Button>
+                      </DialogClose>
+                      <Button type="submit" disabled={isSubmittingTask}>
+                        {isSubmittingTask ? 'Saving...' : (editingTask ? 'Update Task' : 'Add Task')}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </Form>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </header>
+
+        {/* Task Lists */}
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6 overflow-hidden">
+          {/* Pending Tasks */}
+          <Card className="flex flex-col shadow-md">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Circle className="w-5 h-5 text-orange-500" /> Pending Tasks ({pendingTasks.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto"> {/* Changed overflow-hidden to overflow-y-auto */}
+              {/* Removed ScrollArea as CardContent now handles scroll */}
+              {isLoadingTasks ? (
+                  <div className="space-y-3 p-1"> {/* Added padding */}
+                      <Skeleton className="h-14 w-full" />
+                      <Skeleton className="h-14 w-full" />
+                      <Skeleton className="h-14 w-full" />
+                  </div>
+              ) : pendingTasks.length === 0 ? (
+                <p className="text-center text-muted-foreground italic py-6">No pending tasks. Add one!</p>
+              ) : (
+                <ul className="space-y-3">
+                  {pendingTasks.map((task) => (
+                    <li
+                      key={task.id}
+                      className={cn(
+                          "flex items-start gap-3 p-3 border rounded-lg hover:bg-accent/50 transition-colors",
+                          task.priority === 1 && "border-l-4 border-l-destructive", // Highlight highest priority
+                          task.priority === 2 && "border-l-4 border-l-orange-500",
+                          task.priority === 3 && "border-l-4 border-l-yellow-500"
+                      )}
+                    >
+                      <Checkbox
+                        id={`task-${task.id}`}
+                        checked={task.completed}
+                        onCheckedChange={() => handleToggleComplete(task.id)}
+                        aria-label={`Mark task "${task.name}" as complete`}
+                        className="mt-1 shrink-0" // Align checkbox nicely
+                      />
+                      <div className="flex-1 overflow-hidden mr-2">
+                        <Label
+                          htmlFor={`task-${task.id}`}
+                          className={cn(
+                            "font-medium cursor-pointer block", // Removed truncate initially
+                            task.completed ? 'line-through text-muted-foreground' : ''
+                          )}
+                        >
+                           {/* Display Priority Badge if available */}
+                           {task.priority && (
+                              <Badge variant="secondary" className="mr-1.5 px-1 py-0 text-[10px]">
+                                P{task.priority}
+                              </Badge>
+                           )}
+                          {task.name}
+                        </Label>
+                         {/* Due Date and Time */}
+                         <p className="text-xs text-muted-foreground mt-0.5">
+                            Due: {format(task.dueDate, 'MMM d, yyyy, h:mm a')}
+                         </p>
+                         {/* Description and Reason (if available) */}
+                        {(task.description || task.reason) && (
+                            <p className="text-xs text-muted-foreground/80 mt-1 line-clamp-2" title={task.description + (task.reason ? ` (Reason: ${task.reason})` : '')}>
+                              {task.description} {task.reason && <span className="italic">(Reason: {task.reason})</span>}
+                            </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-center gap-1 mt-0.5 shrink-0">
+                         <Badge variant={task.category === 'goal' ? 'default' : 'secondary'} className="capitalize text-xs shrink-0 h-5 px-1.5">
+                           {task.category}
+                         </Badge>
+                        <TooltipProvider delayDuration={100}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => handleEdit(task)}>
+                                <span className="sr-only">Edit Task</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                  <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
+                                  <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" />
+                                </svg>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Edit Task</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider delayDuration={100}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive shrink-0" onClick={() => handleDelete(task.id, task.name)}>
+                                <span className="sr-only">Delete Task</span>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Delete Task</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Completed Tasks */}
+          <Card className="flex flex-col shadow-md">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-green-600" /> Completed Tasks ({completedTasks.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto"> {/* Changed overflow-hidden to overflow-y-auto */}
+               {/* Removed ScrollArea */}
+                {isLoadingTasks ? (
+                     <div className="space-y-3 p-1 opacity-70"> {/* Added padding */}
+                         <Skeleton className="h-12 w-full" />
+                         <Skeleton className="h-12 w-full" />
+                     </div>
+                ) : completedTasks.length === 0 ? (
+                  <p className="text-center text-muted-foreground italic py-6">No completed tasks yet.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {completedTasks.map((task) => (
+                      <li
+                        key={task.id}
+                        className="flex items-start gap-3 p-3 border border-dashed rounded-lg bg-secondary/30"
+                      >
+                        <Checkbox
+                          id={`task-${task.id}`}
+                          checked={task.completed}
+                          onCheckedChange={() => handleToggleComplete(task.id)}
+                          aria-label={`Mark task "${task.name}" as incomplete`}
+                          className="opacity-70 mt-1 shrink-0"
+                        />
+                        <div className="flex-1 overflow-hidden mr-2">
+                          <Label
+                            htmlFor={`task-${task.id}`}
+                            className={cn(
+                              "font-medium cursor-pointer block",
+                              'line-through text-muted-foreground/80'
+                            )}
+                          >
+                            {task.name}
+                          </Label>
+                           {/* Completed Date/Time */}
+                           <p className="text-xs text-muted-foreground/60 mt-0.5">
+                             Done: {format(task.dueDate, 'MMM d, h:mm a')} {/* Simplified format */}
+                           </p>
+                          {/* Description (Optional) */}
+                          {task.description && (
+                              <p className="text-xs text-muted-foreground/50 mt-1 line-clamp-1" title={task.description}>
+                                {task.description}
+                              </p>
+                          )}
+                        </div>
+                        <div className="flex flex-col sm:flex-row items-center gap-1 mt-0.5 shrink-0">
+                             <Badge variant={task.category === 'goal' ? 'default' : 'secondary'} className="capitalize text-xs opacity-60 shrink-0 h-5 px-1.5">
+                                 {task.category}
+                             </Badge>
+                             <TooltipProvider delayDuration={100}>
+                               <Tooltip>
+                                 <TooltipTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive opacity-70 shrink-0" onClick={() => handleDelete(task.id, task.name)}>
+                                      <span className="sr-only">Delete Task</span>
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Delete Task</TooltipContent>
+                                </Tooltip>
+                             </TooltipProvider>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
-
     </div>
   );
 }
-
