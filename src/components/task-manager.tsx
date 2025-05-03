@@ -863,9 +863,12 @@ export function TaskManager() {
 
     if (taskList.length === 0) {
         return (
-            <p className="text-center text-muted-foreground italic py-6">
-                {isCompletedList ? "No completed tasks yet." : "No tasks here. Add one!"}
-            </p>
+             // Wrap the empty state message in a div that centers it
+             <div className="flex items-center justify-center h-full">
+                <p className="text-center text-muted-foreground italic py-6">
+                    {isCompletedList ? "No completed tasks yet." : "No tasks here. Add one!"}
+                </p>
+             </div>
         );
     }
 
@@ -1297,9 +1300,10 @@ export function TaskManager() {
 
             {/* Content for Goals Tab */}
              <TabsContent value="goals" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0"> {/* Adjusted classes */}
-                <Card className="flex-1 flex flex-col shadow-md">
+                <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Added overflow-hidden */}
                     <CardContent className="flex-1 p-0"> {/* Remove padding from CardContent */}
-                        <ScrollArea className="h-full p-4"> {/* Add ScrollArea here */}
+                         {/* Ensure ScrollArea itself can take full height */}
+                        <ScrollArea className="h-full p-4">
                            {renderTaskList(pendingGoals)}
                         </ScrollArea>
                     </CardContent>
@@ -1309,9 +1313,10 @@ export function TaskManager() {
             {/* Content for Chores Tab */}
              {/* Use consistent classes with Goals Tab */}
              <TabsContent value="chores" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0">
-                 <Card className="flex-1 flex flex-col shadow-md">
+                 <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Added overflow-hidden */}
                     <CardContent className="flex-1 p-0"> {/* Remove padding from CardContent */}
-                        <ScrollArea className="h-full p-4"> {/* Add ScrollArea here */}
+                        {/* Ensure ScrollArea itself can take full height */}
+                        <ScrollArea className="h-full p-4">
                           {renderTaskList(pendingChores)}
                         </ScrollArea>
                     </CardContent>
@@ -1341,4 +1346,3 @@ export function TaskManager() {
     </div>
   );
 }
-
