@@ -16,7 +16,7 @@ import { createTask, type CreateTaskInput } from './create-task-flow';
 import { CreateTaskOutputSchema } from '@/ai/schemas';
 import type { PrioritizedTask } from '@/components/task-manager';
 import { format, parseISO, isValid } from 'date-fns';
-import type { CreateTaskOutput } from './create-task-flow'; // Explicitly import CreateTaskOutput
+import type { CreateTaskOutput } from '@/ai/schemas'; // Use the schema type
 
 // --- System Prompt ---
 // Refined system prompt focusing on the tsundere personality with hidden care.
@@ -76,12 +76,9 @@ const PrioritizedTaskDataSchema = z.object({
 });
 export type PrioritizedTaskData = z.infer<typeof PrioritizedTaskDataSchema>;
 
-// Use the imported CreateTaskOutputSchema for consistency
 // Make the createdTask optional in the output
-// Ensure the schema allows dueDate to be optional/nullable
-const CreatedTaskSchema = CreateTaskOutputSchema.extend({
-    dueDate: CreateTaskOutputSchema.shape.dueDate.optional().nullable()
-}).optional().describe('The task object if one was created during the chat.');
+// Use the imported CreateTaskOutputSchema directly
+const CreatedTaskSchema = CreateTaskOutputSchema.optional().describe('The task object if one was created during the chat.');
 
 
 const AiriChatOutputSchema = z.object({
@@ -256,6 +253,8 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
         // Try to return a structured error response
         return {
             response: "Hmph. My thoughts got scrambled. I couldn't generate a proper response. Ask differently, maybe?",
+            createdTask: undefined, // Ensure optional fields are undefined on error
+            prioritizedTasks: undefined,
             success: false, // Indicate critical failure due to schema mismatch
             error: `LLM output schema validation failed: ${parsedOutput.error.message}`,
         };
@@ -265,13 +264,14 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
     let finalOutput = parsedOutput.data;
 
     // --- Post-processing ---
-    let frontendCreatedTask: PrioritizedTask | undefined = undefined;
+    let frontendCreatedTask: CreateTaskOutput | undefined = undefined; // Use the correct type
      // Handle optional dueDate for created tasks
      if (finalOutput.createdTask?.id && finalOutput.createdTask?.name) {
-         const createdTaskData = finalOutput.createdTask as CreateTaskOutput; // Assume schema match
+         const createdTaskData = finalOutput.createdTask; // Already parsed, use directly
          let parsedDate: Date | null = null; // Initialize as null
 
-         if (createdTaskData.dueDate) { // Only parse if dueDate exists
+         // Check if dueDate exists and is a string before parsing
+         if (createdTaskData.dueDate && typeof createdTaskData.dueDate === 'string') {
              try {
                  parsedDate = parseISO(createdTaskData.dueDate);
                  if (!isValid(parsedDate)) {
@@ -284,23 +284,26 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
                  finalOutput.response += " (My date calculation went haywire for that task.)";
                  parsedDate = null; // Set back to null on error
              }
+         } else if (createdTaskData.dueDate) {
+            // If dueDate exists but is not a string (should not happen with current schema, but good to handle)
+            console.warn(`[airiChat] Unexpected dueDate type received from created task: ${typeof createdTaskData.dueDate}. Discarding date.`);
+            parsedDate = null;
          }
 
-         // Use the correctly typed task structure expected by the frontend
-         frontendCreatedTask = {
-             id: createdTaskData.id,
-             name: createdTaskData.name,
-             description: createdTaskData.description || '',
-             dueDate: parsedDate, // *** Assign the Date object or null ***
-             category: createdTaskData.category || 'goal',
-             completed: createdTaskData.completed || false,
-             priority: createdTaskData.priority,
-             reason: createdTaskData.reason,
-         };
-         console.log("[airiChat] Processed created task:", frontendCreatedTask);
+         // Map the AI output (which matches CreateTaskOutputSchema) to the structure
+         // expected by the frontend if necessary, or use the schema type directly.
+         // If PrioritizedTask and CreateTaskOutput have different structures (e.g., dueDate type),
+         // mapping/conversion is required here. Since CreateTaskOutputSchema now allows null dueDate,
+         // and PrioritizedTask also allows null, they should be compatible if schema is correct.
 
-         // Update finalOutput.createdTask to match the frontend structure (optional, depends if you reuse finalOutput later)
-         // finalOutput.createdTask = frontendCreatedTask; // Might cause type issues if not careful
+         // Assign the potentially null date string back for the final output,
+         // The frontend TaskManager will handle parsing it into a Date object or null.
+         frontendCreatedTask = {
+             ...createdTaskData, // Spread the parsed data
+             dueDate: parsedDate ? parsedDate.toISOString() : null, // Ensure dueDate is ISO string or null
+         };
+
+         console.log("[airiChat] Processed created task for output:", frontendCreatedTask);
      }
 
 
@@ -311,13 +314,13 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
         console.log("[airiChat] Processing prioritization results (already formatted):", frontendPrioritizedTasks);
     }
 
-    // Construct the final return object
+    // Construct the final return object using the AiriChatOutput type
     const returnPayload: AiriChatOutput = {
         response: finalOutput.response,
-        // Include the frontend-ready task *if* it was created and valid
-        createdTask: frontendCreatedTask,
+        // Include the processed task data *if* it was created and valid
+        createdTask: frontendCreatedTask, // This should match the `createdTask` field in AiriChatOutputSchema
         prioritizedTasks: frontendPrioritizedTasks,
-        success: true, // Indicate successful execution (even with graceful tool failures mentioned in response)
+        success: true, // Indicate successful execution
         error: undefined,
     };
 
@@ -332,10 +335,11 @@ export async function airiChat(input: AiriChatInput): Promise<AiriChatOutput> {
       } else if (error.message?.includes('deadline exceeded') || error.message?.includes('timeout')) {
           errorMessage = "Hmph. Took too long to think. Try again.";
       } else if (error.message) {
+          // Include more specific error details if available
           errorMessage = `Hmph. Something broke internally. Error: ${error.message}`;
       }
 
-      // Return a structured error response
+      // Return a structured error response conforming to AiriChatOutputSchema
       return {
           response: errorMessage,
           createdTask: undefined,
