@@ -73,12 +73,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import {
   Accordion,
   AccordionContent,
   AccordionItem,
@@ -158,7 +152,7 @@ export function TaskManager() {
   const [isTTSEnabled, setIsTTSEnabled] = React.useState(true);
   const [voices, setVoices] = React.useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = React.useState<SpeechSynthesisVoice | null>(null);
-  const [activeTab, setActiveTab] = React.useState<'goals' | 'chores'>('goals');
+  // const [activeTab, setActiveTab] = React.useState<'goals' | 'chores'>('goals'); // Removed Tabs state
 
 
   const { toast } = useToast();
@@ -302,21 +296,23 @@ export function TaskManager() {
       description: '',
       dueDate: undefined, // Initialize as undefined
       dueTime: '', // Default to empty string
-      category: activeTab === 'goals' ? 'goal' : 'chore', // Default based on active tab
+      category: 'goal', // Default to 'goal' as tabs are removed
     },
   });
 
-   // Update default category when tab changes
+   // Reset form if needed (e.g., when edit dialog opens/closes)
    React.useEffect(() => {
-    taskForm.reset({ // Reset form to update default category
-      name: '',
-      description: '',
-      dueDate: undefined,
-      dueTime: '',
-      category: activeTab === 'goals' ? 'goal' : 'chore',
-    });
+      if (!isEditDialogOpen) {
+          taskForm.reset({ // Reset form to default when dialog closes
+             name: '',
+             description: '',
+             dueDate: undefined,
+             dueTime: '',
+             category: 'goal', // Reset category to default
+           });
+       }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [activeTab]); // Depend on activeTab
+   }, [isEditDialogOpen]); // Depend on dialog state
 
 
   const airiChatForm = useForm<AiriChatFormData>({
@@ -401,13 +397,7 @@ export function TaskManager() {
         setTasks([newTask, ...tasks]);
         toast({ title: 'Task Added', description: `"${data.name}" has been added.` });
       }
-      taskForm.reset({ // Reset with category based on active tab
-         name: '',
-         description: '',
-         dueDate: undefined,
-         dueTime: '',
-         category: activeTab === 'goals' ? 'goal' : 'chore',
-       });
+      // Form reset is handled by useEffect based on isEditDialogOpen
       setEditingTask(null);
       setIsEditDialogOpen(false); // Close dialog after submission
     } catch (error) {
@@ -1137,7 +1127,7 @@ export function TaskManager() {
             {/* Add/Edit Task Dialog Trigger */}
             <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: new Date(), dueTime: '', category: activeTab === 'goals' ? 'goal' : 'chore' }); setIsEditDialogOpen(true); }}>
+                <Button size="sm" className="gap-1.5" onClick={() => { setEditingTask(null); taskForm.reset({ name: '', description: '', dueDate: new Date(), dueTime: '', category: 'goal' }); setIsEditDialogOpen(true); }}> {/* Default category to 'goal' */}
                   <Plus className="w-4 h-4" />
                   Add Task
                 </Button>
@@ -1285,63 +1275,55 @@ export function TaskManager() {
           </div>
         </header>
 
-        {/* Task Lists with Tabs */}
-         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'goals' | 'chores')} className="flex-1 flex flex-col overflow-hidden">
-             <TabsList className="grid w-full grid-cols-2 mb-4">
-                <TabsTrigger value="goals" className="gap-1.5">
-                    <Target className="w-4 h-4" />
-                    Goals ({pendingGoals.length})
-                </TabsTrigger>
-                <TabsTrigger value="chores" className="gap-1.5">
-                    <ListChecks className="w-4 h-4" />
-                    Chores ({pendingChores.length})
-                </TabsTrigger>
-            </TabsList>
+        {/* Task Display Area - Combined Goals and Chores */}
+        <div className="flex-1 flex flex-col gap-6 overflow-hidden"> {/* Use flex-col and gap */}
 
-            {/* Content for Goals Tab */}
-             <TabsContent value="goals" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0"> {/* Adjusted classes */}
-                <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Added overflow-hidden */}
-                    <CardContent className="flex-1 p-0"> {/* Remove padding from CardContent */}
-                         {/* Ensure ScrollArea itself can take full height */}
+            {/* Goals Section */}
+            <div className="flex flex-col overflow-hidden"> {/* Section for Goals */}
+                <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
+                    <Target className="w-5 h-5" /> Goals ({pendingGoals.length})
+                </h2>
+                <Card className="flex-1 flex flex-col shadow-md overflow-hidden">
+                    <CardContent className="flex-1 p-0">
                         <ScrollArea className="h-full p-4">
                            {renderTaskList(pendingGoals)}
                         </ScrollArea>
                     </CardContent>
                 </Card>
-            </TabsContent>
+            </div>
 
-            {/* Content for Chores Tab */}
-             {/* Use consistent classes with Goals Tab */}
-             <TabsContent value="chores" className="flex-1 flex flex-col overflow-hidden mt-0 ring-0 focus-visible:ring-0">
-                 <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Added overflow-hidden */}
-                    <CardContent className="flex-1 p-0"> {/* Remove padding from CardContent */}
-                        {/* Ensure ScrollArea itself can take full height */}
+            {/* Chores Section */}
+            <div className="flex flex-col overflow-hidden"> {/* Section for Chores */}
+                <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
+                    <ListChecks className="w-5 h-5" /> Chores ({pendingChores.length})
+                </h2>
+                 <Card className="flex-1 flex flex-col shadow-md overflow-hidden">
+                    <CardContent className="flex-1 p-0">
                         <ScrollArea className="h-full p-4">
                           {renderTaskList(pendingChores)}
                         </ScrollArea>
                     </CardContent>
                  </Card>
-            </TabsContent>
+            </div>
 
-            {/* Completed Tasks Accordion (below tabs) */}
-            <Accordion type="single" collapsible className="mt-6 shrink-0">
+            {/* Completed Tasks Accordion (at the bottom) */}
+            <Accordion type="single" collapsible className="mt-auto shrink-0"> {/* Use mt-auto to push to bottom */}
               <AccordionItem value="completed-tasks">
                 <AccordionTrigger>
-                  <div className="flex items-center gap-2 text-lg font-medium"> {/* Adjusted styling */}
+                  <div className="flex items-center gap-2 text-lg font-medium">
                      <CheckCircle className="w-5 h-5 text-green-600" /> Completed Tasks ({completedTasks.length})
                    </div>
                 </AccordionTrigger>
                 <AccordionContent>
-                  {/* Ensure the content area is scrollable if needed */}
-                   <ScrollArea className="max-h-60"> {/* Example max height */}
-                     <div className="p-1"> {/* Add some padding */}
+                   <ScrollArea className="max-h-60">
+                     <div className="p-1">
                         {renderTaskList(completedTasks, true)}
                      </div>
                    </ScrollArea>
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
-        </Tabs>
+        </div>
       </div>
     </div>
   );
