@@ -9,7 +9,7 @@ import { format, isValid, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid'; // For generating unique IDs
+// import { v4 as uuidv4 } from 'uuid'; // Use crypto.randomUUID for modern browsers
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -196,39 +196,91 @@ export function TaskManager() {
     }
   }, [tasks, isLoadingTasks, toast]);
 
-   // Load TTS Voices
+   // Load TTS Voices and Select Best Female English Voice
    React.useEffect(() => {
-       const loadVoices = () => {
-           const availableVoices = window.speechSynthesis.getVoices();
-           if (availableVoices.length > 0) {
-               setVoices(availableVoices);
-               // Prioritize finding a female English voice
-               let airiVoice = availableVoices.find(v => v.lang.startsWith('en') && v.name.toLowerCase().includes('female'));
-               // Fallback to any English voice if no female voice is found
-               if (!airiVoice) {
-                   airiVoice = availableVoices.find(v => v.lang.startsWith('en'));
-               }
-               setSelectedVoice(airiVoice || null);
-               console.log("Selected TTS Voice:", airiVoice?.name, airiVoice?.lang);
-               console.log("All Available Voices:", availableVoices.map(v => ({ name: v.name, lang: v.lang })));
-           }
-       };
+    const loadVoices = () => {
+        const availableVoices = window.speechSynthesis.getVoices();
+        if (availableVoices.length > 0) {
+            setVoices(availableVoices);
 
-       // Voices might load asynchronously
-       if ('speechSynthesis' in window) {
-           loadVoices(); // Try immediate load
-           window.speechSynthesis.onvoiceschanged = loadVoices; // Load when voices change
-       } else {
-           console.warn("Text-to-Speech synthesis not supported in this browser.");
-           setIsTTSEnabled(false);
-       }
+            console.log("All Available Voices:", availableVoices.map(v => ({ name: v.name, lang: v.lang, default: v.default, quality: (v as any).quality || 'N/A' })));
 
-       return () => {
-           if ('speechSynthesis' in window) {
-               window.speechSynthesis.onvoiceschanged = null; // Cleanup listener
-           }
-       };
-   }, []);
+            // --- Refined Voice Selection Logic ---
+            // 1. Filter for English voices, prioritizing US English but including others.
+            const englishVoices = availableVoices.filter(v => v.lang.startsWith('en'));
+
+            // 2. Filter for female voices within the English list.
+            const femaleEnglishVoices = englishVoices.filter(v =>
+                v.name.toLowerCase().includes('female') ||
+                v.name.toLowerCase().includes('woman') ||
+                // Some voices don't explicitly mention gender but are known female
+                v.name.match(/Samantha|Victoria|Karen|Tessa|Google UK English Female|Google US English/i) // Add more known female voice names
+            );
+
+            // 3. Prioritize "Google" or higher quality voices if available.
+            let bestVoice = femaleEnglishVoices.find(v => v.name.startsWith('Google') && v.lang === 'en-US');
+             if (!bestVoice) {
+                 bestVoice = femaleEnglishVoices.find(v => v.name.startsWith('Google')); // Any Google female voice
+             }
+             // Add prioritization for known high-quality OS voices (examples)
+             if (!bestVoice) {
+                 bestVoice = femaleEnglishVoices.find(v => v.name.includes('Samantha') || v.name.includes('Victoria')); // Example: macOS voices
+             }
+
+            // 4. Fallback: Any female English voice.
+            if (!bestVoice) {
+                bestVoice = femaleEnglishVoices[0];
+            }
+
+            // 5. Fallback: Any English voice.
+            if (!bestVoice) {
+                bestVoice = englishVoices.find(v => v.lang === 'en-US'); // Prefer US English
+            }
+             if (!bestVoice) {
+                 bestVoice = englishVoices[0]; // Any English voice
+             }
+
+            // 6. Absolute Fallback: Browser/OS default (might not be female or English).
+            if (!bestVoice) {
+                 bestVoice = availableVoices.find(v => v.default);
+            }
+
+            setSelectedVoice(bestVoice || null); // Use the best found voice or null
+            console.log("Selected TTS Voice:", bestVoice?.name, bestVoice?.lang, `(Default: ${bestVoice?.default})`);
+
+            // --- Explanation for the User ---
+            // console.warn("Note: Specific voices like 'Gemini Assistant' are part of Google's backend services and cannot be directly selected via the browser's Web Speech API. This app uses the best available female English voice provided by your browser/OS.");
+            // toast({ // Optional: Inform user about voice limitations
+            //     title: "TTS Voice Note",
+            //     description: "Using the best available female English voice on your system. Specific voices like 'Gemini' are not selectable via browser APIs.",
+            //     duration: 7000,
+            // });
+
+
+        } else {
+            console.log("Waiting for voices to load...");
+        }
+    };
+
+    if ('speechSynthesis' in window) {
+        loadVoices(); // Try immediate load
+        // Use timeout as fallback if onvoiceschanged doesn't fire reliably
+        const voiceLoadTimeout = setTimeout(loadVoices, 500);
+        window.speechSynthesis.onvoiceschanged = () => {
+            clearTimeout(voiceLoadTimeout); // Clear timeout if event fires
+            loadVoices();
+        };
+    } else {
+        console.warn("Text-to-Speech synthesis not supported in this browser.");
+        setIsTTSEnabled(false);
+    }
+
+    return () => {
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = null; // Cleanup listener
+        }
+    };
+}, []); // Empty dependency array ensures this runs once on mount
 
 
   // --- Form Handling ---
@@ -314,7 +366,7 @@ export function TaskManager() {
       } else {
         // Add new task
         const newTask: PrioritizedTask = {
-          id: uuidv4(),
+          id: crypto.randomUUID(), // Use modern browser API
           name: data.name,
           description: data.description || '',
           dueDate: combinedDueDate,
@@ -389,13 +441,21 @@ export function TaskManager() {
         const utterance = new SpeechSynthesisUtterance(text);
         if (selectedVoice) {
             utterance.voice = selectedVoice;
+             // Apply minor adjustments - these are highly voice-dependent
+             if (selectedVoice.name.includes("Google")) {
+                 utterance.pitch = 1.1; // Slightly higher pitch for Google voices might sound better
+                 utterance.rate = 1.05; // Slightly faster rate
+             } else {
+                 utterance.pitch = 1.0; // Default pitch
+                 utterance.rate = 1.0;  // Default rate
+             }
         } else {
             console.warn("No suitable TTS voice found, using system default.");
+            // Use default pitch/rate if no voice selected
+            utterance.pitch = 1.0;
+            utterance.rate = 1.0;
         }
-        // Adjust pitch and rate slightly for potential character voice tuning
-        // These values are subjective and depend on the selected voice.
-        utterance.pitch = 1.1; // Example: Slightly higher pitch
-        utterance.rate = 1;   // Example: Normal speed
+
 
         utterance.onerror = (event) => {
             console.error("SpeechSynthesis Error:", event.error);
@@ -406,6 +466,7 @@ export function TaskManager() {
             });
         };
 
+        console.log(`Speaking with voice: ${utterance.voice?.name || 'default'}, lang: ${utterance.voice?.lang || 'default'}, rate: ${utterance.rate}, pitch: ${utterance.pitch}`);
         window.speechSynthesis.speak(utterance);
     }, [isTTSEnabled, selectedVoice, toast]);
 
@@ -451,35 +512,43 @@ export function TaskManager() {
 
       // 1. Task Creation
       if (airiOutput.createdTask) {
-          const newTaskFromAiri = airiOutput.createdTask as AiriCreatedTask; // Use imported type
-          console.log("Airi reported task creation:", newTaskFromAiri);
-          // Ensure dueDate is valid before adding
-          const parsedDueDate = parseISO(newTaskFromAiri.dueDate);
-          if (isValid(parsedDueDate)) {
-              const newTask: PrioritizedTask = {
-                  id: newTaskFromAiri.id,
-                  name: newTaskFromAiri.name,
-                  description: newTaskFromAiri.description,
-                  dueDate: parsedDueDate, // Convert ISO string back to Date object
-                  category: newTaskFromAiri.category,
-                  completed: newTaskFromAiri.completed,
-                  priority: newTaskFromAiri.priority,
-                  reason: newTaskFromAiri.reason,
-              };
-              setTasks((prevTasks) => [newTask, ...prevTasks]); // Add to the top
-              toast({
-                  title: "Airi Added a Task",
-                  description: `"${newTask.name}" was created. It wasn't *that* hard.`,
-              });
+          // Ensure createdTask has the expected structure before proceeding
+          const createdTaskData = airiOutput.createdTask as AiriCreatedTask | undefined; // Use imported type, allow undefined
+
+          if (createdTaskData && createdTaskData.id && createdTaskData.name && createdTaskData.dueDate) {
+              console.log("Airi reported task creation:", createdTaskData);
+              // Ensure dueDate is valid before adding
+              const parsedDueDate = parseISO(createdTaskData.dueDate);
+              if (isValid(parsedDueDate)) {
+                  const newTask: PrioritizedTask = {
+                      id: createdTaskData.id,
+                      name: createdTaskData.name,
+                      description: createdTaskData.description || '', // Handle potentially missing description
+                      dueDate: parsedDueDate, // Convert ISO string back to Date object
+                      category: createdTaskData.category || 'goal', // Handle potentially missing category
+                      completed: createdTaskData.completed || false, // Handle potentially missing completed status
+                      priority: createdTaskData.priority,
+                      reason: createdTaskData.reason,
+                  };
+                  setTasks((prevTasks) => [newTask, ...prevTasks]); // Add to the top
+                  toast({
+                      title: "Airi Added a Task",
+                      description: `"${newTask.name}" was created. It wasn't *that* hard.`,
+                  });
+              } else {
+                  console.warn("Airi created a task with an invalid date:", createdTaskData);
+                  toast({
+                      title: "Airi Task Error",
+                      description: "Airi tried to add a task, but messed up the date. Typical.",
+                      variant: "destructive",
+                  });
+              }
           } else {
-              console.warn("Airi created a task with an invalid date:", newTaskFromAiri);
-              toast({
-                  title: "Airi Task Error",
-                  description: "Airi tried to add a task, but messed up the date. Typical.",
-                  variant: "destructive",
-              });
+               console.warn("Airi reported task creation, but data is incomplete:", createdTaskData);
+               // Optionally inform the user, but might be confusing if AI mentioned adding a task
           }
       }
+
 
       // 2. Task Prioritization
       if (airiOutput.prioritizedTasks && airiOutput.prioritizedTasks.length > 0) {
@@ -487,35 +556,55 @@ export function TaskManager() {
           console.log("Priorities received from Airi:", priorities); // Log received data
 
           setTasks(prevTasks => {
-              const updatedTasks = prevTasks.map(task => {
-                  // Find the corresponding priority data from Airi's output using the ID
-                  const priorityData = priorities.find(p => p.id === task.id);
+               const taskMap = new Map(prevTasks.map(task => [task.id, task]));
+               const updatedTasks: PrioritizedTask[] = [];
+               let prioritiesApplied = false;
 
-                  if (priorityData) {
-                      console.log(`Updating priority for task ${task.id} (${task.name}):`, priorityData);
-                      return {
-                          ...task,
-                          priority: priorityData.priority,
-                          reason: priorityData.reason,
-                      };
-                  }
-                  // If no priority data found for this task, reset its priority/reason
-                  // Or decide to keep existing priority if that's desired behavior
-                  return {
-                      ...task,
-                      priority: undefined, // Reset if not prioritized in this batch
-                      reason: undefined,
-                  };
-              });
+               priorities.forEach(p => {
+                   const task = taskMap.get(p.id);
+                   if (task && p.priority !== undefined) { // Check if priority value exists
+                       console.log(`Applying priority to task ${task.id} (${task.name}):`, p);
+                       updatedTasks.push({
+                           ...task,
+                           priority: p.priority,
+                           reason: p.reason,
+                       });
+                       taskMap.delete(p.id); // Remove from map to track processed tasks
+                       prioritiesApplied = true;
+                   } else {
+                       console.warn(`Could not find task with ID ${p.id} or priority data is missing for prioritization update.`);
+                   }
+               });
 
-              console.log("Tasks after priority update:", updatedTasks);
-              return updatedTasks;
-          });
+               // Add back tasks that were not in the prioritization result
+               taskMap.forEach(task => {
+                   // Decide whether to reset priority for tasks not mentioned by Airi
+                   // Option 1: Reset priority
+                   // updatedTasks.push({ ...task, priority: undefined, reason: undefined });
+                   // Option 2: Keep existing priority (current implementation)
+                   updatedTasks.push(task);
+               });
 
-          toast({
-              title: "Airi Prioritized Tasks",
-              description: "Hmph. Fine, I prioritized them. Now get to work.",
-          });
+
+               if (prioritiesApplied) {
+                    toast({
+                        title: "Airi Prioritized Tasks",
+                        description: "Hmph. Fine, I prioritized them. Now get to work.",
+                    });
+               } else if (airiOutput.prioritizedTasks.length > 0) {
+                    // This case means Airi returned priorities, but none matched existing tasks
+                    toast({
+                        title: "Airi Prioritization Mismatch",
+                        description: "Airi tried to prioritize, but couldn't match the tasks. Maybe they changed?",
+                        variant: "destructive",
+                    });
+               }
+
+               console.log("Tasks after potential priority update:", updatedTasks);
+               // Return the potentially modified list
+               return updatedTasks; // Return the new array
+           });
+
       }
 
 
@@ -562,7 +651,16 @@ export function TaskManager() {
             console.log("Voice input transcript:", transcript);
             airiChatForm.setValue('message', transcript); // Set transcript in input
             // Automatically submit the form after transcript is received
-            airiChatForm.handleSubmit(onSubmitAiriChat)();
+             // Check if the form is valid before submitting
+            airiChatForm.trigger('message').then(isValid => {
+                if (isValid) {
+                   onSubmitAiriChat({ message: transcript }); // Manually pass data as form state might not update instantly
+                } else {
+                   // Handle invalid state if needed, though min(1) should be met by transcript
+                   console.warn("Transcript generated but form validation failed (unexpected).");
+                }
+            });
+
             setIsListening(false); // Stop listening animation
         };
 
@@ -587,8 +685,13 @@ export function TaskManager() {
         };
 
         recognition.onend = () => {
-            // Don't automatically turn off listening state here if using manual toggle
-            // setIsListening(false);
+            // Only set listening to false if it wasn't stopped manually or by error/result
+             // if (isListening) { // Check if it was supposed to be listening
+             //    setIsListening(false);
+             //    console.log("Speech recognition ended unexpectedly.");
+             // }
+             // Safer: Rely on result/error handlers or manual toggle to set false
+             // setIsListening(false); // Simpler approach: always set false on end
         };
 
         recognitionRef.current = recognition;
@@ -599,7 +702,8 @@ export function TaskManager() {
                 recognitionRef.current.abort(); // Stop recognition if component unmounts
             }
         };
-    }, [airiChatForm, toast, onSubmitAiriChat]); // Add onSubmitAiriChat as dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [airiChatForm, toast]); // Removed onSubmitAiriChat dependency - form.handleSubmit handles it
 
 
     const toggleListening = () => {
@@ -609,39 +713,48 @@ export function TaskManager() {
         }
 
         if (isListening) {
-            recognitionRef.current.stop();
-            setIsListening(false);
-            console.log("Speech recognition stopped.");
-        } else {
             try {
-                recognitionRef.current.start();
-                setIsListening(true);
-                console.log("Speech recognition started.");
-                // Clear the input field when starting to listen
-                airiChatForm.setValue('message', '');
-            } catch (error: any) {
-                 console.error("Failed to start speech recognition:", error);
-                 let errorMsg = "Could not start voice input.";
-                 if (error.name === 'NotAllowedError') {
-                     errorMsg = 'Microphone permission denied. Please allow access.';
-                 } else if (error.name === 'InvalidStateError') {
-                     // This can happen if start() is called while already running
-                     // Try stopping first, then starting again might be a recovery strategy
-                     try {
-                         recognitionRef.current.stop(); // Attempt to stop
-                         recognitionRef.current.start(); // Try starting again
-                         setIsListening(true);
-                         console.log("Restarted speech recognition after InvalidStateError.");
-                     } catch (retryError) {
-                         console.error("Failed to restart speech recognition:", retryError);
-                         toast({ title: "Voice Input Error", description: errorMsg, variant: "destructive"});
-                         setIsListening(false);
-                     }
-                 } else {
-                     toast({ title: "Voice Input Error", description: errorMsg, variant: "destructive"});
-                     setIsListening(false);
-                 }
+                recognitionRef.current.stop();
+                console.log("Speech recognition stopped manually.");
+            } catch (error) {
+                console.error("Error stopping speech recognition:", error);
+                 // Might happen if already stopped, usually safe to ignore
+            } finally {
+               setIsListening(false);
             }
+        } else {
+            // Request microphone permission proactively if possible (or rely on browser prompt)
+            navigator.mediaDevices.getUserMedia({ audio: true })
+             .then(() => {
+                 try {
+                     airiChatForm.setValue('message', ''); // Clear input field
+                     recognitionRef.current.start();
+                     setIsListening(true);
+                     console.log("Speech recognition started.");
+                 } catch (error: any) {
+                     console.error("Failed to start speech recognition:", error);
+                     let errorMsg = "Could not start voice input.";
+                     if (error.name === 'NotAllowedError') { // Double check error name
+                         errorMsg = 'Microphone permission denied. Please allow access.';
+                     } else if (error.name === 'InvalidStateError') {
+                          errorMsg = 'Speech recognition is already active or in an invalid state.';
+                          // Don't try to restart here, might cause loops. Let user try again.
+                     }
+                     toast({ title: "Voice Input Error", description: errorMsg, variant: "destructive"});
+                     setIsListening(false); // Ensure state is reset
+                 }
+             })
+             .catch(err => {
+                 console.error("Microphone access denied or error:", err);
+                 let errorMsg = 'Microphone access is required for voice input.';
+                 if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                     errorMsg = 'Microphone permission denied. Please allow access in your browser settings.';
+                 } else if (err.name === 'NotFoundError') {
+                      errorMsg = 'No microphone found. Please connect a microphone.';
+                 }
+                 toast({ title: "Microphone Error", description: errorMsg, variant: "destructive"});
+                 setIsListening(false);
+             });
         }
     };
 
@@ -665,7 +778,10 @@ export function TaskManager() {
         return 1; // Unprioritized tasks after prioritized
       }
       // Then sort by due date (earlier first)
-      return (a.dueDate?.getTime() || 0) - (b.dueDate?.getTime() || 0);
+      // Handle potentially invalid dates gracefully during sort
+      const timeA = a.dueDate && isValid(a.dueDate) ? a.dueDate.getTime() : Infinity;
+      const timeB = b.dueDate && isValid(b.dueDate) ? b.dueDate.getTime() : Infinity;
+      return timeA - timeB;
     });
   }, [tasks]);
 
@@ -804,7 +920,7 @@ export function TaskManager() {
                                          disabled={isAiLoading}
                                          className={cn("shrink-0", isListening && "text-destructive animate-pulse ring-2 ring-destructive/50 rounded-full")}
                                        >
-                                         {isListening ? <MicOff /> : <Mic />}
+                                         {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />} {/* Ensure icon size consistency */}
                                          <span className="sr-only">{isListening ? 'Stop Listening' : 'Start Listening'}</span>
                                        </Button>
                                    </TooltipTrigger>
@@ -824,7 +940,7 @@ export function TaskManager() {
                                             onClick={() => setIsTTSEnabled(prev => !prev)}
                                             className="shrink-0"
                                         >
-                                            {isTTSEnabled ? <Volume2 /> : <VolumeX />}
+                                            {isTTSEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />} {/* Ensure icon size consistency */}
                                             <span className="sr-only">{isTTSEnabled ? 'Disable TTS' : 'Enable TTS'}</span>
                                         </Button>
                                     </TooltipTrigger>
@@ -834,7 +950,7 @@ export function TaskManager() {
                                 </Tooltip>
                             </TooltipProvider>
                           <Button type="submit" size="icon" disabled={isAiLoading || isListening} className="shrink-0">
-                            <Send />
+                            <Send className="h-4 w-4" /> {/* Ensure icon size consistency */}
                             <span className="sr-only">Send message</span>
                           </Button>
                         </form>
@@ -909,7 +1025,7 @@ export function TaskManager() {
                                            )}
                                          >
                                            <CalendarIcon className="mr-2 h-4 w-4" />
-                                           {field.value ? format(field.value, 'PPP') : <span>Pick a date</span>}
+                                           {field.value && isValid(field.value) ? format(field.value, 'PPP') : <span>Pick a date</span>}
                                          </Button>
                                        </FormControl>
                                      </PopoverTrigger>
@@ -1049,7 +1165,7 @@ export function TaskManager() {
                         </Label>
                          {/* Due Date and Time */}
                          <p className="text-xs text-muted-foreground mt-0.5">
-                            Due: {format(task.dueDate, 'MMM d, yyyy, h:mm a')}
+                            Due: {task.dueDate && isValid(task.dueDate) ? format(task.dueDate, 'MMM d, yyyy, h:mm a') : 'Invalid Date'}
                          </p>
                          {/* Description and Reason (if available) */}
                         {(task.description || task.reason) && (
@@ -1137,7 +1253,7 @@ export function TaskManager() {
                           </Label>
                            {/* Completed Date/Time */}
                            <p className="text-xs text-muted-foreground/60 mt-0.5">
-                             Done: {format(task.dueDate, 'MMM d, h:mm a')} {/* Simplified format */}
+                             Done: {task.dueDate && isValid(task.dueDate) ? format(task.dueDate, 'MMM d, h:mm a') : 'Invalid Date'} {/* Simplified format */}
                            </p>
                           {/* Description (Optional) */}
                           {task.description && (
