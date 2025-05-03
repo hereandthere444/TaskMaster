@@ -1370,10 +1370,11 @@ export function TaskManager() {
                 <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
                     <Target className="w-5 h-5" /> Goals ({pendingGoals.length})
                 </h2>
-                <Card className="shadow-md"> {/* Removed flex-1, flex, flex-col, overflow-hidden */}
+                 {/* Ensure Card and CardContent don't restrict height unnecessarily */}
+                <Card className="shadow-md">
                     <CardContent className="p-0">
-                        {/* ScrollArea should define its own height or use max-height */}
-                        <ScrollArea className="max-h-96 p-4"> {/* Example: max-h-96 */}
+                        {/* Adjust max-height as needed or use a different approach */}
+                        <ScrollArea className="h-72 p-4"> {/* Increased height example */}
                            {renderTaskList(pendingGoals)}
                         </ScrollArea>
                     </CardContent>
@@ -1385,10 +1386,11 @@ export function TaskManager() {
                 <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
                     <ListChecks className="w-5 h-5" /> Chores ({pendingChores.length})
                 </h2>
-                 <Card className="shadow-md"> {/* Removed flex-1, flex, flex-col, overflow-hidden */}
+                 {/* Ensure Card and CardContent don't restrict height unnecessarily */}
+                 <Card className="shadow-md">
                     <CardContent className="p-0">
-                        {/* ScrollArea should define its own height or use max-height */}
-                        <ScrollArea className="max-h-96 p-4"> {/* Example: max-h-96 */}
+                         {/* Adjust max-height as needed or use a different approach */}
+                        <ScrollArea className="h-72 p-4"> {/* Increased height example */}
                           {renderTaskList(pendingChores)}
                         </ScrollArea>
                     </CardContent>
