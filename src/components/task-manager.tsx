@@ -280,8 +280,16 @@ export function TaskManager() {
                  bestVoice = availableVoices.find(v => v.default);
             }
 
-            setSelectedVoice(bestVoice || null); // Use the best found voice or null
-            console.log("Selected TTS Voice:", bestVoice?.name, bestVoice?.lang, `(Default: ${bestVoice?.default})`);
+            // Try to find a Japanese voice specifically for the accent attempt
+            const japaneseVoices = availableVoices.filter(v => v.lang.startsWith('ja') && v.name.toLowerCase().includes('female'));
+            const selectedJapaneseVoice = japaneseVoices.find(v => v.name.startsWith('Google')) || japaneseVoices[0]; // Prefer Google Japanese
+
+            // If a Japanese voice is found, use it, otherwise fallback to the best English voice
+            setSelectedVoice(selectedJapaneseVoice || bestVoice || null);
+            console.log("Selected TTS Voice:", selectedJapaneseVoice ? selectedJapaneseVoice.name : (bestVoice?.name || 'None found'), selectedJapaneseVoice ? selectedJapaneseVoice.lang : (bestVoice?.lang || 'N/A'));
+
+            // setSelectedVoice(bestVoice || null); // Use the best found voice or null
+            // console.log("Selected TTS Voice:", bestVoice?.name, bestVoice?.lang, `(Default: ${bestVoice?.default})`);
 
         } else {
             console.log("Waiting for voices to load...");
@@ -379,7 +387,9 @@ export function TaskManager() {
            }
        } else {
            // If date is provided but no time, just use the start of that day (or default time like 9 AM)
-           newDate.setHours(9, 0); // Default to 9 AM on the given date
+           // newDate.setHours(9, 0); // Default to 9 AM on the given date
+           // If no time is provided, just return the date part (start of day)
+           newDate.setHours(0, 0, 0, 0);
        }
 
        if (!isValid(newDate)) {
@@ -495,7 +505,12 @@ export function TaskManager() {
         if (selectedVoice) {
             utterance.voice = selectedVoice;
              // Apply minor adjustments - these are highly voice-dependent
-             if (selectedVoice.name.includes("Google")) {
+             // Pitch/rate adjustments for perceived accent (experimental)
+             if (selectedVoice.lang.startsWith('ja')) {
+                // If using a Japanese voice to speak English
+                utterance.pitch = 1.0; // May need adjustment
+                utterance.rate = 0.9; // Slightly slower might emphasize accent
+             } else if (selectedVoice.name.includes("Google")) {
                  utterance.pitch = 1.1; // Slightly higher pitch for Google voices might sound better
                  utterance.rate = 1.05; // Slightly faster rate
              } else {
@@ -1025,9 +1040,10 @@ export function TaskManager() {
 
   // --- Render ---
   return (
-    <div className="flex h-screen bg-background">
+    // Remove fixed height (h-screen) and overflow-hidden to allow scrolling
+    <div className="flex flex-col bg-background">
       {/* Main Task Area */}
-      <div className="flex-1 flex flex-col p-4 md:p-6 lg:p-8 overflow-hidden">
+      <div className="flex-1 flex flex-col p-4 md:p-6 lg:p-8"> {/* Removed overflow-hidden */}
         {/* Header */}
         <header className="flex items-center justify-between mb-6 border-b pb-4">
           <h1 className="text-3xl font-bold text-primary flex items-center gap-2">
@@ -1346,16 +1362,18 @@ export function TaskManager() {
         </header>
 
         {/* Task Display Area - Combined Goals and Chores */}
-        <div className="flex-1 flex flex-col gap-6 overflow-hidden"> {/* Use flex-col and gap */}
+        {/* Removed flex-1 and overflow-hidden to allow natural height */}
+        <div className="flex flex-col gap-6">
 
             {/* Goals Section */}
-            <div className="flex flex-col"> {/* Section for Goals - Removed overflow-hidden */}
+            <div className="flex flex-col">
                 <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
                     <Target className="w-5 h-5" /> Goals ({pendingGoals.length})
                 </h2>
-                <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Keep overflow-hidden here for Card */}
-                    <CardContent className="flex-1 p-0">
-                        <ScrollArea className="h-full p-4"> {/* ScrollArea manages scrolling */}
+                <Card className="shadow-md"> {/* Removed flex-1, flex, flex-col, overflow-hidden */}
+                    <CardContent className="p-0">
+                        {/* ScrollArea should define its own height or use max-height */}
+                        <ScrollArea className="max-h-96 p-4"> {/* Example: max-h-96 */}
                            {renderTaskList(pendingGoals)}
                         </ScrollArea>
                     </CardContent>
@@ -1363,13 +1381,14 @@ export function TaskManager() {
             </div>
 
             {/* Chores Section */}
-            <div className="flex flex-col"> {/* Section for Chores - Removed overflow-hidden */}
+            <div className="flex flex-col">
                 <h2 className="text-xl font-semibold mb-3 flex items-center gap-1.5">
                     <ListChecks className="w-5 h-5" /> Chores ({pendingChores.length})
                 </h2>
-                 <Card className="flex-1 flex flex-col shadow-md overflow-hidden"> {/* Keep overflow-hidden here for Card */}
-                    <CardContent className="flex-1 p-0">
-                        <ScrollArea className="h-full p-4"> {/* ScrollArea manages scrolling */}
+                 <Card className="shadow-md"> {/* Removed flex-1, flex, flex-col, overflow-hidden */}
+                    <CardContent className="p-0">
+                        {/* ScrollArea should define its own height or use max-height */}
+                        <ScrollArea className="max-h-96 p-4"> {/* Example: max-h-96 */}
                           {renderTaskList(pendingChores)}
                         </ScrollArea>
                     </CardContent>
@@ -1377,7 +1396,8 @@ export function TaskManager() {
             </div>
 
             {/* Completed Tasks Accordion (at the bottom) */}
-            <Accordion type="single" collapsible className="mt-auto shrink-0"> {/* Use mt-auto to push to bottom */}
+            {/* Removed mt-auto, keep shrink-0 */}
+            <Accordion type="single" collapsible className="shrink-0">
               <AccordionItem value="completed-tasks">
                 <AccordionTrigger>
                   <div className="flex items-center gap-2 text-lg font-medium">
@@ -1385,6 +1405,7 @@ export function TaskManager() {
                    </div>
                 </AccordionTrigger>
                 <AccordionContent>
+                   {/* ScrollArea within Accordion */}
                    <ScrollArea className="max-h-60">
                      <div className="p-1">
                         {renderTaskList(completedTasks, true)}
@@ -1398,3 +1419,4 @@ export function TaskManager() {
     </div>
   );
 }
+
